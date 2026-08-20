@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Acesso - Catálogo de Filmes</title>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+
+<body>
+  <div class="container auth-container">
+    <div class="glass-panel">
+      <h1>🎬 NicoFlix</h1>
+      <p class="subtitle">Acesse ou crie sua conta para explorar o catálogo de filmes do Tom Hanks.</p>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+      {% for category, message in messages %}
+      <div class="alert alert-{{ category }}">{{ message }}</div>
+      {% endfor %}
+      {% endif %}
+      {% endwith %}
+
+      <div class="tabs">
+        <button class="tab-btn active" onclick="switchTab('login')">Entrar</button>
+        <button class="tab-btn" onclick="switchTab('register')">Cadastrar</button>
+      </div>
+
+      <!-- Form de Login -->
+      <form id="form-login" action="/login" method="POST">
+        <div class="form-group">
+          <label for="login-usuario">Usuário</label>
+          <input type="text" id="login-usuario" name="usuario" required placeholder="Digite seu usuário">
+        </div>
+        <div class="form-group">
+          <label for="login-senha">Senha</label>
+          <input type="password" id="login-senha" name="senha" required placeholder="••••••••">
+        </div>
+        <button type="submit" class="btn-primary">Entrar no Sistema</button>
+      </form>
+
+      <!-- Form de Cadastro -->
+      <form id="form-register" action="/register" method="POST" style="display: none;">
+        <div class="form-group">
+          <label for="reg-usuario">Escolha um Usuário</label>
+          <input type="text" id="reg-usuario" name="usuario" required placeholder="Ex: nicollas">
+        </div>
+        <div class="form-group">
+          <label for="reg-senha">Crie uma Senha</label>
+          <input type="password" id="reg-senha" name="senha" required placeholder="••••••••">
+        </div>
+        <button type="submit" class="btn-primary">Criar Minha Conta</button>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    function switchTab(type) {
+      const formLogin = document.getElementById('form-login');
+      const formRegister = document.getElementById('form-register');
+      const tabs = document.querySelectorAll('.tab-btn');
+
+      if (type === 'login') {
+        formLogin.style.display = 'block';
+        formRegister.style.display = 'none';
+        tabs[0].classList.add('active');
+        tabs[1].classList.remove('active');
+      } else {
+        formLogin.style.display = 'none';
+        formRegister.style.display = 'block';
+        tabs[0].classList.remove('active');
+        tabs[1].classList.add('active');
+      }
+    }
+  </script>
+</body>
+
+</html>
