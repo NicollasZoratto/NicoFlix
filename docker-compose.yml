@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  web:
+    build: .
+    ports:
+      - "8223:80"
+    environment:
+      - TMDB_API_KEY=6566259ba55415e75fcdaaec316a8be7
+      - DB_HOST=35.226.64.52
+      - DB_USER=IAC_2026_02_nicollas_carvalho
+      - DB_PASSWORD=nico11as
+      - DB_NAME=IAC_2026_02_nicollas_carvalho
+      - SECRET_KEY=chave_secreta_padrao_desenv
