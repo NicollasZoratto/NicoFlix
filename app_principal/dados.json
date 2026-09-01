@@ -1,0 +1,17 @@
+[
+    {
+        "nome": "Nicollas Zoratto",
+        "telefone": "11999999999",
+        "valor": 150.5
+    },
+    {
+        "nome": "Davi Zoratto",
+        "telefone": "11555555555",
+        "valor": 700.5
+    },
+    {
+        "nome": "Pedro Barbosa ",
+        "telefone": "1499999999",
+        "valor": 2.5
+    }
+]

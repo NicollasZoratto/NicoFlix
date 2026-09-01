@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Catálogo Tom Hanks</title>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+
+<body>
+  <div class="container">
+    <div class="glass-panel">
+      <div class="top-bar">
+        <h1>🎬 NicoFlix</h1>
+        <div class="user-info">
+          <span>Usuário: <strong>{{ usuario }}</strong></span>
+          <span class="badge">{{ role }}</span>
+          {% if role == 'admin' %}
+          <a href="{{ url_for('admin_comentarios') }}" class="btn-secondary">🛡️ Moderação</a>
+          {% endif %}
+          <a href="/logout" class="btn-logout">Sair</a>
+        </div>
+      </div>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+      {% for category, message in messages %}
+      <div class="alert alert-{{ category }}">{{ message }}</div>
+      {% endfor %}
+      {% endif %}
+      {% endwith %}
+
+      <div class="movie-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1.5rem; margin-top: 1.5rem;">
+        {% for f in filmes %}
+        <div class="movie-card" style="display: flex; flex-direction: column; justify-content: space-between;">
+          <div>
+            {% if f.poster_path %}
+            <img src="https://image.tmdb.org/t/p/w500{{ f.poster_path }}" alt="{{ f.title }}" style="width: 100%; border-radius: 10px; margin-bottom: 0.8rem;">
+            {% endif %}
+            <div class="movie-title" style="font-weight: 700;">{{ f.title }}</div>
+            <span class="movie-meta" style="font-size: 0.85rem; color: var(--text-secondary);">📅 {{ f.release_date[:4] if f.release_date else 'N/A' }}</span>
+          </div>
+
+          <form action="{{ url_for('favoritar') }}" method="POST" style="margin-top: 0.8rem;">
+            <input type="hidden" name="movie_id" value="{{ f.id }}">
+            <button type="submit" class="btn-primary" style="width: 100%; padding: 0.4rem; font-size: 0.8rem;">
+              {% if f.id in favoritos %} ⭐ Remover Favorito {% else %} ☆ Favoritar {% endif %}
+            </button>
+          </form>
+
+          <form action="{{ url_for('comentar') }}" method="POST" style="margin-top: 0.5rem;">
+            <input type="hidden" name="movie_id" value="{{ f.id }}">
+            <textarea name="comentario" rows="2" placeholder="Seu comentário..." style="width: 100%; font-size: 0.8rem; margin-bottom: 0.5rem; border-radius: 6px;">{{ comentarios.get(f.id, '') }}</textarea>
+            <button type="submit" class="btn-primary" style="width: 100%; padding: 0.4rem; font-size: 0.8rem;">
+              {% if f.id in comentarios %} ✏️ Atualizar Comentário {% else %} 💬 Comentar {% endif %}
+            </button>
+          </form>
+
+          {% if f.id in comentarios %}
+          <form action="{{ url_for('excluir_comentario') }}" method="POST" style="margin-top: 0.3rem;">
+            <input type="hidden" name="movie_id" value="{{ f.id }}">
+            <input type="hidden" name="redirect_to" value="index">
+            <button type="submit" class="btn-secondary" style="width: 100%; padding: 0.3rem; font-size: 0.75rem;">
+              🗑️ Remover meu comentário
+            </button>
+          </form>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</body>
+
+</html>

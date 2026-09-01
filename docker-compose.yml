@@ -1,0 +1,49 @@
+version: "3.8"
+
+services:
+  auth_service:
+    build:
+      context: ./auth_service
+      dockerfile: Dockerfile
+    container_name: nicoflix_auth
+    environment:
+      - DB_HOST=35.226.64.52
+      - DB_USER=IAC_2026_02_nicollas_carvalho
+      - DB_PASSWORD=nico11as
+      - DB_NAME=IAC_2026_02_nicollas_carvalho
+      - JWT_SECRET=chave_secreta_jwt_super_segura
+      # URL pública do catálogo, usada para montar o link de "esqueci minha senha"
+      - PUBLIC_APP_URL=http://localhost:8223
+      # Credenciais SMTP (ex: Mailtrap em dev, Brevo em produção).
+      # Sem essas variáveis, o link de redefinição é apenas logado no console do container.
+      - SMTP_HOST=
+      - SMTP_PORT=2525
+      - SMTP_USER=
+      - SMTP_PASS=
+      - SMTP_FROM=no-reply@nicoflix.local
+    networks:
+      - nicoflix-net
+
+  web:
+    build:
+      context: ./app_principal
+      dockerfile: Dockerfile
+    container_name: nicoflix_web
+    ports:
+      - "8223:80"
+    environment:
+      - AUTH_SERVICE_URL=http://auth_service:5001
+      - TMDB_API_KEY=6566259ba55415e75fcdaaec316a8be7
+      - DB_HOST=35.226.64.52
+      - DB_USER=IAC_2026_02_nicollas_carvalho
+      - DB_PASSWORD=nico11as
+      - DB_NAME=IAC_2026_02_nicollas_carvalho
+      - SECRET_KEY=chave_secreta_padrao_desenv
+    depends_on:
+      - auth_service
+    networks:
+      - nicoflix-net
+
+networks:
+  nicoflix-net:
+    driver: bridge

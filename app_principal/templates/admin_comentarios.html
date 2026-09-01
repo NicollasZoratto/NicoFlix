@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NicoFlix - Moderação de Comentários</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <style>
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 1.5rem;
+    }
+
+    th, td {
+      text-align: left;
+      padding: 0.75rem;
+      border-bottom: 1px solid var(--border-color);
+      font-size: 0.9rem;
+    }
+
+    th {
+      color: var(--text-secondary);
+      font-weight: 700;
+      text-transform: uppercase;
+      font-size: 0.75rem;
+      letter-spacing: 0.05em;
+    }
+
+    .btn-danger {
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.4);
+      color: #fca5a5;
+      box-shadow: none;
+    }
+
+    .btn-danger:hover {
+      background: rgba(239, 68, 68, 0.25);
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <div class="glass-panel">
+      <div class="top-bar">
+        <h1>🛡️ Moderação de Comentários</h1>
+        <div class="user-info">
+          <span>Admin: <strong>{{ usuario }}</strong></span>
+          <a href="{{ url_for('index') }}" class="btn-secondary">← Voltar ao catálogo</a>
+        </div>
+      </div>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+      {% for category, message in messages %}
+      <div class="alert alert-{{ category }}">{{ message }}</div>
+      {% endfor %}
+      {% endif %}
+      {% endwith %}
+
+      {% if comentarios %}
+      <table>
+        <thead>
+          <tr>
+            <th>Usuário</th>
+            <th>Filme</th>
+            <th>Comentário</th>
+            <th>Ação</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in comentarios %}
+          <tr>
+            <td>{{ c.username }}</td>
+            <td>{{ c.titulo_filme }}</td>
+            <td>{{ c.comentario }}</td>
+            <td>
+              <form action="{{ url_for('excluir_comentario') }}" method="POST" style="margin: 0;">
+                <input type="hidden" name="movie_id" value="{{ c.movie_id }}">
+                <input type="hidden" name="user_id" value="{{ c.user_id }}">
+                <input type="hidden" name="redirect_to" value="admin">
+                <button type="submit" class="btn-danger">🗑️ Apagar</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p style="margin-top: 1.5rem; color: var(--text-secondary);">Nenhum comentário ainda.</p>
+      {% endif %}
+    </div>
+  </div>
+</body>
+
+</html>
