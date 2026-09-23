@@ -1,26 +1,49 @@
 version: "3.8"
 
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: nicoflix_redis
+    # sem "ports": só acessível dentro da rede interna do Docker
+    networks:
+      - nicoflix-net
+
+  log_service:
+    build:
+      context: ./log_service
+      dockerfile: Dockerfile
+    container_name: nicoflix_logs
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      - redis
+    networks:
+      - nicoflix-net
+
   auth_service:
     build:
       context: ./auth_service
       dockerfile: Dockerfile
     container_name: nicoflix_auth
     environment:
-      - DB_HOST=35.226.64.52
-      - DB_USER=IAC_2026_02_nicollas_carvalho
-      - DB_PASSWORD=nico11as
-      - DB_NAME=IAC_2026_02_nicollas_carvalho
-      - JWT_SECRET=chave_secreta_jwt_super_segura
+      - DB_HOST=${DB_HOST:-35.226.64.52}
+      - DB_USER=${DB_USER:-IAC_2026_02_nicollas_carvalho}
+      - DB_PASSWORD=${DB_PASSWORD:-nico11as}
+      - DB_NAME=${DB_NAME:-IAC_2026_02_nicollas_carvalho}
+      - JWT_SECRET=${JWT_SECRET:-chave_secreta_jwt_super_segura}
       # URL pública do catálogo, usada para montar o link de "esqueci minha senha"
-      - PUBLIC_APP_URL=http://localhost:8223
-      # Credenciais SMTP (ex: Mailtrap em dev, Brevo em produção).
-      # Sem essas variáveis, o link de redefinição é apenas logado no console do container.
-      - SMTP_HOST=
-      - SMTP_PORT=2525
-      - SMTP_USER=
-      - SMTP_PASS=
-      - SMTP_FROM=no-reply@nicoflix.local
+      - PUBLIC_APP_URL=${PUBLIC_APP_URL:-http://localhost:8223}
+      # Credenciais SMTP (Mailtrap em dev, Brevo em produção). Preencha no
+      # seu .env — sem elas, o link de redefinição é só logado no console.
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-2525}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASS=${SMTP_PASS:-}
+      - SMTP_FROM=${SMTP_FROM:-no-reply@nicoflix.local}
+      - LOG_SERVICE_URL=http://log_service:5002
+    depends_on:
+      - log_service
     networks:
       - nicoflix-net
 
@@ -33,14 +56,16 @@ services:
       - "8223:80"
     environment:
       - AUTH_SERVICE_URL=http://auth_service:5001
-      - TMDB_API_KEY=6566259ba55415e75fcdaaec316a8be7
-      - DB_HOST=35.226.64.52
-      - DB_USER=IAC_2026_02_nicollas_carvalho
-      - DB_PASSWORD=nico11as
-      - DB_NAME=IAC_2026_02_nicollas_carvalho
-      - SECRET_KEY=chave_secreta_padrao_desenv
+      - LOG_SERVICE_URL=http://log_service:5002
+      - TMDB_API_KEY=${TMDB_API_KEY:-6566259ba55415e75fcdaaec316a8be7}
+      - DB_HOST=${DB_HOST:-35.226.64.52}
+      - DB_USER=${DB_USER:-IAC_2026_02_nicollas_carvalho}
+      - DB_PASSWORD=${DB_PASSWORD:-nico11as}
+      - DB_NAME=${DB_NAME:-IAC_2026_02_nicollas_carvalho}
+      - SECRET_KEY=${SECRET_KEY:-chave_secreta_padrao_desenv}
     depends_on:
       - auth_service
+      - log_service
     networks:
       - nicoflix-net
 

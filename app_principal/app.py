@@ -8,6 +8,7 @@ app.secret_key = os.getenv("SECRET_KEY", "chave_secreta_padrao_desenv")
 
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "6566259ba55415e75fcdaaec316a8be7")
 AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL", "http://auth_service:5001")
+LOG_SERVICE_URL = os.getenv("LOG_SERVICE_URL", "http://log_service:5002")
 
 DB_HOST = os.getenv("DB_HOST", "35.226.64.52")
 DB_USER = os.getenv("DB_USER", "IAC_2026_02_nicollas_carvalho")
@@ -54,6 +55,21 @@ def init_app_tables():
 
 
 init_app_tables()
+
+
+def log_event(usuario_id, acao):
+    """Envia um evento de auditoria para o log_service (login, logout,
+    favoritar, comentar, apagar comentário, tentativas negadas por
+    permissão etc). Nunca deve quebrar o fluxo principal: se o
+    log_service estiver fora do ar, só loga o erro no console."""
+    try:
+        requests.post(
+            f"{LOG_SERVICE_URL}/log",
+            json={"usuario_id": usuario_id, "acao": acao, "ip": request.remote_addr},
+            timeout=3
+        )
+    except Exception as e:
+        print(f"[LOG WARNING] Não foi possível registrar evento '{acao}': {e}")
 
 
 def get_current_user():
@@ -175,7 +191,11 @@ def verify_2fa_page():
     if request.method == 'POST':
         code = request.form.get('code')
         try:
-            res = requests.post(f"{AUTH_SERVICE_URL}/verify-2fa", json={"username": username, "code": code}, timeout=5)
+            res = requests.post(
+                f"{AUTH_SERVICE_URL}/verify-2fa",
+                json={"username": username, "code": code, "ip": request.remote_addr},
+                timeout=5
+            )
             if res.status_code == 200:
                 data = res.json()
                 session.pop('pending_username', None)
@@ -248,6 +268,9 @@ def reset_senha(token):
 
 @app.route('/logout')
 def logout():
+    user = get_current_user()
+    if user:
+        log_event(user['user_id'], 'logout')
     session.clear()
     return redirect(url_for('login'))
 
@@ -272,6 +295,7 @@ def comentar():
         db.commit()
         cursor.close()
         db.close()
+        log_event(user['user_id'], f'comentar:filme_{movie_id}')
     except Exception as e:
         print(f"Erro ao salvar comentário: {e}")
 
@@ -303,6 +327,7 @@ def excluir_comentario():
 
     if not is_own_comment and not is_admin:
         # 403: usuário comum tentando apagar comentário de outra pessoa
+        log_event(user['user_id'], f'403_apagar_comentario_negado:filme_{movie_id}')
         abort(403)
 
     try:
@@ -315,6 +340,8 @@ def excluir_comentario():
         db.commit()
         cursor.close()
         db.close()
+        acao = 'apagar_comentario_proprio' if is_own_comment else 'apagar_comentario_moderacao'
+        log_event(user['user_id'], f'{acao}:filme_{movie_id}:usuario_{target_user_id}')
     except Exception as e:
         print(f"Erro ao excluir comentário: {e}")
 
@@ -332,18 +359,13 @@ def admin_comentarios():
     if not user:
         return redirect(url_for('login'))
     if user.get('role') != 'admin':
+        log_event(user['user_id'], '403_acesso_moderacao_negado')
         abort(403)
 
     movies = fetch_tom_hanks_movies()
     titulos_filmes = {m['id']: m.get('title', f"Filme #{m['id']}") for m in movies}
 
-    usuarios_por_id = {}
-    try:
-        res = requests.get(f"{AUTH_SERVICE_URL}/users", timeout=5)
-        if res.status_code == 200:
-            usuarios_por_id = {u['id']: u['username'] for u in res.json().get('users', [])}
-    except Exception as e:
-        print(f"Erro ao buscar usuários no Auth Service: {e}")
+    usuarios_por_id = _buscar_usuarios()
 
     comentarios = []
     try:
@@ -366,6 +388,78 @@ def admin_comentarios():
     return render_template('admin_comentarios.html', comentarios=comentarios, usuario=user['username'])
 
 
+def _buscar_usuarios():
+    """Busca {id: username} no auth_service. Usado só pra exibição
+    (moderação e logs) — decisão de permissão nunca depende disso."""
+    try:
+        res = requests.get(f"{AUTH_SERVICE_URL}/users", timeout=5)
+        if res.status_code == 200:
+            return {u['id']: u['username'] for u in res.json().get('users', [])}
+    except Exception as e:
+        print(f"Erro ao buscar usuários no Auth Service: {e}")
+    return {}
+
+
+_ACAO_LABELS = {
+    'login': '🔓 Login',
+    'logout': '🔒 Logout',
+    'favoritar': '⭐ Favoritou',
+    'desfavoritar': '☆ Desfavoritou',
+}
+
+
+def _rotular_acao(acao_bruta):
+    """Traduz a string crua de ação salva no log pra um rótulo amigável."""
+    base = acao_bruta.split(':')[0]
+    if base in _ACAO_LABELS:
+        return _ACAO_LABELS[base]
+    if base.startswith('403'):
+        return f"🚫 Ação negada (403) — {acao_bruta}"
+    if base.startswith('comentar'):
+        return f"💬 Comentou — {acao_bruta}"
+    if base.startswith('apagar_comentario'):
+        return f"🗑️ Apagou comentário — {acao_bruta}"
+    return acao_bruta
+
+
+@app.route('/admin/logs')
+def admin_logs():
+    """Consulta de auditoria: lista os últimos eventos registrados no
+    log_service. Endpoint exclusivo de admin — mesmo controle de acesso
+    da atividade 4 (403 pra quem não é admin, mesmo direto na URL)."""
+    user = get_current_user()
+    if not user:
+        return redirect(url_for('login'))
+    if user.get('role') != 'admin':
+        log_event(user['user_id'], '403_acesso_logs_negado')
+        abort(403)
+
+    usuarios_por_id = _buscar_usuarios()
+
+    eventos = []
+    try:
+        res = requests.get(f"{LOG_SERVICE_URL}/events", params={"limit": 100}, timeout=5)
+        if res.status_code == 200:
+            for e in res.json().get('events', []):
+                uid = e.get('usuario_id')
+                try:
+                    uid_int = int(uid)
+                except (TypeError, ValueError):
+                    uid_int = uid
+                eventos.append({
+                    "usuario": usuarios_por_id.get(uid_int, f"Usuário #{uid}"),
+                    "acao": _rotular_acao(e.get('acao', '')),
+                    "timestamp": e.get('timestamp', ''),
+                    "ip": e.get('ip', ''),
+                })
+        else:
+            flash("Não foi possível consultar o serviço de logs.", "danger")
+    except Exception as e:
+        flash(f"Erro de conexão com o serviço de logs: {e}", "danger")
+
+    return render_template('admin_logs.html', eventos=eventos, usuario=user['username'])
+
+
 @app.route('/favoritar', methods=['POST'])
 def favoritar():
     user = get_current_user()
@@ -382,12 +476,15 @@ def favoritar():
 
         if existente:
             cursor.execute("DELETE FROM favoritos WHERE id = %s", (existente[0],))
+            acao = 'desfavoritar'
         else:
             cursor.execute("INSERT INTO favoritos (user_id, movie_id) VALUES (%s, %s)", (user['user_id'], movie_id))
+            acao = 'favoritar'
 
         db.commit()
         cursor.close()
         db.close()
+        log_event(user['user_id'], f'{acao}:filme_{movie_id}')
     except Exception as e:
         print(f"Erro ao favoritar: {e}")
 

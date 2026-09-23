@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>NicoFlix — Moderação de Comentários</title>
+  <title>NicoFlix — Logs e Auditoria</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 
@@ -12,10 +12,10 @@
   <div class="container">
     <div class="glass-panel">
       <div class="top-bar">
-        <h1>🛡️ Moderação de Comentários</h1>
+        <h1>📜 Logs e Auditoria</h1>
         <div class="user-info">
           <span>Admin: <strong>{{ usuario }}</strong></span>
-          <a href="{{ url_for('admin_logs') }}" class="btn-secondary">📜 Logs</a>
+          <a href="{{ url_for('admin_comentarios') }}" class="btn-secondary">🛡️ Moderação</a>
           <a href="{{ url_for('index') }}" class="btn-secondary">← Voltar ao catálogo</a>
         </div>
       </div>
@@ -28,38 +28,35 @@
       {% endif %}
       {% endwith %}
 
-      {% if comentarios %}
+      <p class="muted small" style="margin-bottom: 0.5rem;">
+        Mostrando os últimos {{ eventos|length }} eventos registrados (mais recente primeiro), lidos do Redis Stream do <code>log_service</code>.
+      </p>
+
+      {% if eventos %}
       <div class="table-wrapper">
         <table>
           <thead>
             <tr>
+              <th>Quando</th>
               <th>Usuário</th>
-              <th>Filme</th>
-              <th>Comentário</th>
               <th>Ação</th>
+              <th>IP</th>
             </tr>
           </thead>
           <tbody>
-            {% for c in comentarios %}
+            {% for e in eventos %}
             <tr>
-              <td>{{ c.username }}</td>
-              <td>{{ c.titulo_filme }}</td>
-              <td>{{ c.comentario }}</td>
-              <td>
-                <form action="{{ url_for('excluir_comentario') }}" method="POST" style="margin: 0;">
-                  <input type="hidden" name="movie_id" value="{{ c.movie_id }}">
-                  <input type="hidden" name="user_id" value="{{ c.user_id }}">
-                  <input type="hidden" name="redirect_to" value="admin">
-                  <button type="submit" class="btn-danger">🗑️ Apagar</button>
-                </form>
-              </td>
+              <td class="mono">{{ e.timestamp }}</td>
+              <td>{{ e.usuario }}</td>
+              <td>{{ e.acao }}</td>
+              <td class="mono">{{ e.ip or '—' }}</td>
             </tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
       {% else %}
-      <p class="empty-state">Nenhum comentário ainda.</p>
+      <p class="empty-state">Nenhum evento registrado ainda (ou o log_service está indisponível).</p>
       {% endif %}
     </div>
   </div>

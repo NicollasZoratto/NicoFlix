@@ -6,6 +6,7 @@ import datetime
 from email.mime.text import MIMEText
 
 import jwt
+import requests
 import mysql.connector
 from flask import Flask, request, jsonify
 
@@ -26,6 +27,9 @@ SMTP_PORT = int(os.getenv("SMTP_PORT", "2525"))
 SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASS = os.getenv("SMTP_PASS", "")
 SMTP_FROM = os.getenv("SMTP_FROM", "no-reply@nicoflix.local")
+
+# Serviço de logs/auditoria (Atividade 5) — container interno, sem porta publicada
+LOG_SERVICE_URL = os.getenv("LOG_SERVICE_URL", "http://log_service:5002")
 
 RESET_TOKEN_TTL_MINUTES = 30
 
@@ -81,6 +85,20 @@ def init_db():
 
 
 init_db()
+
+
+def log_event(usuario_id, acao, ip=None):
+    """Envia um evento de auditoria para o log_service. Nunca deve
+    quebrar o fluxo principal — se o log_service estiver fora do ar,
+    só loga o erro no console e segue a vida."""
+    try:
+        requests.post(
+            f"{LOG_SERVICE_URL}/log",
+            json={"usuario_id": usuario_id, "acao": acao, "ip": ip},
+            timeout=3
+        )
+    except Exception as e:
+        print(f"[LOG WARNING] Não foi possível registrar evento '{acao}': {e}")
 
 
 def send_email(to_email, subject, body):
@@ -182,6 +200,7 @@ def process_verify_2fa():
     data = request.get_json() or {}
     username = data.get('username')
     code = data.get('code')
+    ip = data.get('ip')
 
     if not username or not code:
         return jsonify({"error": "Dados de 2FA incompletos"}), 400
@@ -210,6 +229,8 @@ def process_verify_2fa():
             "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=2)
         }
         token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
+        log_event(user['id'], 'login', ip)
 
         return jsonify({"token": token, "username": user['username'], "role": user['role']}), 200
     except Exception as e:
@@ -360,8 +381,9 @@ def reset_password():
 @app.route('/users', methods=['GET'])
 def list_users():
     """Lista básica de usuários (id, username, role), usada pelo catálogo
-    para exibir nomes no painel de moderação. Não expõe e-mail nem senha.
-    Só acessível dentro da rede interna do Docker (auth_service não publica porta)."""
+    para exibir nomes no painel de moderação e nos logs. Não expõe e-mail
+    nem senha. Só acessível dentro da rede interna do Docker (auth_service
+    não publica porta)."""
     try:
         db = get_db()
         cursor = db.cursor(dictionary=True)
