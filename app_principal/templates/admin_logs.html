@@ -1,13 +1,11 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
-
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NicoFlix — Logs e Auditoria</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-
 <body>
   <div class="container">
     <div class="glass-panel">
@@ -35,14 +33,7 @@
       {% if eventos %}
       <div class="table-wrapper">
         <table>
-          <thead>
-            <tr>
-              <th>Quando</th>
-              <th>Usuário</th>
-              <th>Ação</th>
-              <th>IP</th>
-            </tr>
-          </thead>
+          <thead><tr><th>Quando</th><th>Usuário</th><th>Ação</th><th>IP</th></tr></thead>
           <tbody>
             {% for e in eventos %}
             <tr>
@@ -61,5 +52,4 @@
     </div>
   </div>
 </body>
-
 </html>

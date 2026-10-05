@@ -1,7 +1,14 @@
+import io
 import os
+import uuid
+import datetime
+
 import requests
 from flask import Flask, render_template, request, redirect, url_for, session, flash, abort
 import mysql.connector
+from minio import Minio
+from minio.error import S3Error
+from PIL import Image
 
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "chave_secreta_padrao_desenv")
@@ -15,18 +22,44 @@ DB_USER = os.getenv("DB_USER", "IAC_2026_02_nicollas_carvalho")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "nico11as")
 DB_NAME = os.getenv("DB_NAME", "IAC_2026_02_nicollas_carvalho")
 
+# --- MinIO (Atividade 6: fotos de perfil) ---
+# Endpoint INTERNO: usado pra upload/leitura de verdade, via rede Docker (rápido, não depende do host).
+MINIO_INTERNAL_ENDPOINT = os.getenv("MINIO_INTERNAL_ENDPOINT", "minio:9000")
+# Endpoint PÚBLICO: usado só pra MONTAR a URL pré-assinada, porque é o navegador do
+# usuário (não o container) que vai baixar a imagem direto do MinIO.
+MINIO_PUBLIC_ENDPOINT = os.getenv("MINIO_PUBLIC_ENDPOINT", "localhost:9000")
+MINIO_ACCESS_KEY = os.getenv("MINIO_ROOT_USER", "nicoflix_admin")
+MINIO_SECRET_KEY = os.getenv("MINIO_ROOT_PASSWORD", "nicoflix_minio_secret")
+MINIO_BUCKET = os.getenv("MINIO_BUCKET", "nicoflix-perfis")
+MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
+PRESIGNED_URL_EXPIRY_SECONDS = int(os.getenv("PRESIGNED_URL_EXPIRY_SECONDS", "3600"))  # 1h
+
+MAX_FOTO_SIZE_BYTES = 2 * 1024 * 1024  # 2 MB
+FORMATOS_AGEITOS = {"jpeg", "png", "webp"}
+
+minio_client = Minio(
+    MINIO_INTERNAL_ENDPOINT,
+    access_key=MINIO_ACCESS_KEY,
+    secret_key=MINIO_SECRET_KEY,
+    secure=MINIO_SECURE,
+)
+# Cliente separado só pra assinar URLs com o host público embutido na assinatura.
+minio_public_client = Minio(
+    MINIO_PUBLIC_ENDPOINT,
+    access_key=MINIO_ACCESS_KEY,
+    secret_key=MINIO_SECRET_KEY,
+    secure=MINIO_SECURE,
+)
+
 
 def get_db():
     return mysql.connector.connect(
-        host=DB_HOST,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        database=DB_NAME
+        host=DB_HOST, user=DB_USER, password=DB_PASSWORD, database=DB_NAME
     )
 
 
 def init_app_tables():
-    """Garante a existência das tabelas de favoritos e comentários."""
+    """Garante a existência das tabelas de favoritos, comentários e perfis."""
     try:
         db = get_db()
         cursor = db.cursor()
@@ -47,6 +80,15 @@ def init_app_tables():
                 UNIQUE KEY user_movie_fav (user_id, movie_id)
             )
         """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS perfis (
+                user_id INT PRIMARY KEY,
+                nome_exibicao VARCHAR(100) NOT NULL,
+                bio VARCHAR(280) NOT NULL DEFAULT '',
+                foto_key VARCHAR(255),
+                atualizado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            )
+        """)
         db.commit()
         cursor.close()
         db.close()
@@ -54,14 +96,21 @@ def init_app_tables():
         print(f"Erro ao inicializar tabelas da app principal: {e}")
 
 
+def init_minio_bucket():
+    """Garante que o bucket dedicado deste projeto existe no MinIO."""
+    try:
+        if not minio_client.bucket_exists(MINIO_BUCKET):
+            minio_client.make_bucket(MINIO_BUCKET)
+            print(f"[MINIO] Bucket '{MINIO_BUCKET}' criado.")
+    except Exception as e:
+        print(f"[MINIO ERROR] Falha ao preparar bucket '{MINIO_BUCKET}': {e}")
+
+
 init_app_tables()
+init_minio_bucket()
 
 
 def log_event(usuario_id, acao):
-    """Envia um evento de auditoria para o log_service (login, logout,
-    favoritar, comentar, apagar comentário, tentativas negadas por
-    permissão etc). Nunca deve quebrar o fluxo principal: se o
-    log_service estiver fora do ar, só loga o erro no console."""
     try:
         requests.post(
             f"{LOG_SERVICE_URL}/log",
@@ -96,6 +145,76 @@ def fetch_tom_hanks_movies():
     except Exception as e:
         print(f"Erro TMDB: {e}")
     return []
+
+
+def get_or_create_perfil(user_id, username_padrao):
+    """Busca o perfil do usuário; cria um com valores padrão se ainda não existir."""
+    try:
+        db = get_db()
+        cursor = db.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM perfis WHERE user_id = %s", (user_id,))
+        row = cursor.fetchone()
+        if not row:
+            cursor.execute(
+                "INSERT INTO perfis (user_id, nome_exibicao, bio, foto_key) VALUES (%s, %s, '', NULL)",
+                (user_id, username_padrao)
+            )
+            db.commit()
+            row = {"user_id": user_id, "nome_exibicao": username_padrao, "bio": "", "foto_key": None}
+        cursor.close()
+        db.close()
+        return row
+    except Exception as e:
+        print(f"Erro ao buscar/criar perfil: {e}")
+        return {"user_id": user_id, "nome_exibicao": username_padrao, "bio": "", "foto_key": None}
+
+
+def gerar_url_foto(foto_key):
+    """Gera uma URL pré-assinada (temporária) pra servir a foto de perfil
+    direto do MinIO pro navegador, sem o bucket precisar ser público."""
+    if not foto_key:
+        return None
+    try:
+        return minio_public_client.presigned_get_object(
+            MINIO_BUCKET, foto_key,
+            expires=datetime.timedelta(seconds=PRESIGNED_URL_EXPIRY_SECONDS)
+        )
+    except Exception as e:
+        print(f"Erro ao gerar URL assinada da foto: {e}")
+        return None
+
+
+def _buscar_usuarios():
+    try:
+        res = requests.get(f"{AUTH_SERVICE_URL}/users", timeout=5)
+        if res.status_code == 200:
+            return {u['id']: u['username'] for u in res.json().get('users', [])}
+    except Exception as e:
+        print(f"Erro ao buscar usuários no Auth Service: {e}")
+    return {}
+
+
+_ACAO_LABELS = {
+    'login': '🔓 Login',
+    'logout': '🔒 Logout',
+    'favoritar': '⭐ Favoritou',
+    'desfavoritar': '☆ Desfavoritou',
+    'editar_perfil': '📝 Editou o perfil',
+    'upload_foto_perfil': '🖼️ Trocou a foto de perfil',
+}
+
+
+def _rotular_acao(acao_bruta):
+    base = acao_bruta.split(':')[0]
+    if base in _ACAO_LABELS:
+        return _ACAO_LABELS[base]
+    if base.startswith('403'):
+        return f"🚫 Ação negada (403) — {acao_bruta}"
+    if base.startswith('comentar'):
+        return f"💬 Comentou — {acao_bruta}"
+    if base.startswith('apagar_comentario'):
+        return f"🗑️ Apagou comentário — {acao_bruta}"
+    return acao_bruta
 
 
 @app.route('/')
@@ -138,7 +257,6 @@ def login():
     if request.method == 'POST':
         username = request.form.get('username')
         password = request.form.get('password')
-
         try:
             res = requests.post(f"{AUTH_SERVICE_URL}/login", json={"username": username, "password": password}, timeout=5)
             if res.status_code == 200:
@@ -163,7 +281,6 @@ def cadastro():
         username = request.form.get('username')
         email = request.form.get('email')
         password = request.form.get('password')
-
         try:
             res = requests.post(
                 f"{AUTH_SERVICE_URL}/register",
@@ -253,7 +370,6 @@ def reset_senha(token):
             flash(f"Erro de conexão com serviço de autenticação: {e}", "danger")
             return render_template('reset_password.html', token=token)
 
-    # GET: valida o token antes de mostrar o formulário
     try:
         res = requests.post(f"{AUTH_SERVICE_URL}/validate-reset-token", json={"token": token}, timeout=5)
         if res.status_code != 200 or not res.json().get('valid'):
@@ -304,11 +420,6 @@ def comentar():
 
 @app.route('/comentar/excluir', methods=['POST'])
 def excluir_comentario():
-    """Apaga um comentário. Usuário comum só pode apagar o PRÓPRIO
-    comentário; apagar o comentário de outra pessoa é ação exclusiva de
-    admin. A checagem é sempre feita aqui no backend, usando o papel
-    (role) que o auth_service validou e devolveu no token — então nem
-    chamando este endpoint direto pelo Postman/curl dá pra burlar."""
     user = get_current_user()
     if not user:
         return redirect(url_for('login'))
@@ -326,7 +437,6 @@ def excluir_comentario():
     is_admin = user.get('role') == 'admin'
 
     if not is_own_comment and not is_admin:
-        # 403: usuário comum tentando apagar comentário de outra pessoa
         log_event(user['user_id'], f'403_apagar_comentario_negado:filme_{movie_id}')
         abort(403)
 
@@ -352,9 +462,6 @@ def excluir_comentario():
 
 @app.route('/admin/comentarios')
 def admin_comentarios():
-    """Painel de moderação: lista todos os comentários de todos os
-    usuários, para o admin poder apagar qualquer um. Ação exclusiva de
-    admin — usuário comum recebe 403, mesmo acessando a URL direto."""
     user = get_current_user()
     if not user:
         return redirect(url_for('login'))
@@ -364,7 +471,6 @@ def admin_comentarios():
 
     movies = fetch_tom_hanks_movies()
     titulos_filmes = {m['id']: m.get('title', f"Filme #{m['id']}") for m in movies}
-
     usuarios_por_id = _buscar_usuarios()
 
     comentarios = []
@@ -388,45 +494,8 @@ def admin_comentarios():
     return render_template('admin_comentarios.html', comentarios=comentarios, usuario=user['username'])
 
 
-def _buscar_usuarios():
-    """Busca {id: username} no auth_service. Usado só pra exibição
-    (moderação e logs) — decisão de permissão nunca depende disso."""
-    try:
-        res = requests.get(f"{AUTH_SERVICE_URL}/users", timeout=5)
-        if res.status_code == 200:
-            return {u['id']: u['username'] for u in res.json().get('users', [])}
-    except Exception as e:
-        print(f"Erro ao buscar usuários no Auth Service: {e}")
-    return {}
-
-
-_ACAO_LABELS = {
-    'login': '🔓 Login',
-    'logout': '🔒 Logout',
-    'favoritar': '⭐ Favoritou',
-    'desfavoritar': '☆ Desfavoritou',
-}
-
-
-def _rotular_acao(acao_bruta):
-    """Traduz a string crua de ação salva no log pra um rótulo amigável."""
-    base = acao_bruta.split(':')[0]
-    if base in _ACAO_LABELS:
-        return _ACAO_LABELS[base]
-    if base.startswith('403'):
-        return f"🚫 Ação negada (403) — {acao_bruta}"
-    if base.startswith('comentar'):
-        return f"💬 Comentou — {acao_bruta}"
-    if base.startswith('apagar_comentario'):
-        return f"🗑️ Apagou comentário — {acao_bruta}"
-    return acao_bruta
-
-
 @app.route('/admin/logs')
 def admin_logs():
-    """Consulta de auditoria: lista os últimos eventos registrados no
-    log_service. Endpoint exclusivo de admin — mesmo controle de acesso
-    da atividade 4 (403 pra quem não é admin, mesmo direto na URL)."""
     user = get_current_user()
     if not user:
         return redirect(url_for('login'))
@@ -435,7 +504,6 @@ def admin_logs():
         abort(403)
 
     usuarios_por_id = _buscar_usuarios()
-
     eventos = []
     try:
         res = requests.get(f"{LOG_SERVICE_URL}/events", params={"limit": 100}, timeout=5)
@@ -489,6 +557,162 @@ def favoritar():
         print(f"Erro ao favoritar: {e}")
 
     return redirect(url_for('index'))
+
+
+@app.route('/perfil')
+def perfil():
+    """Página de perfil do usuário logado: nome, bio, foto e os filmes
+    favoritados (reaproveitando a tabela 'favoritos' desde a atividade 2)."""
+    user = get_current_user()
+    if not user:
+        return redirect(url_for('login'))
+
+    dados_perfil = get_or_create_perfil(user['user_id'], user['username'])
+    foto_url = gerar_url_foto(dados_perfil.get('foto_key'))
+
+    favoritos_filmes = []
+    try:
+        db = get_db()
+        cursor = db.cursor(dictionary=True)
+        cursor.execute("SELECT movie_id FROM favoritos WHERE user_id = %s", (user['user_id'],))
+        ids_favoritos = {row['movie_id'] for row in cursor.fetchall()}
+        cursor.close()
+        db.close()
+
+        if ids_favoritos:
+            for m in fetch_tom_hanks_movies():
+                if m['id'] in ids_favoritos:
+                    favoritos_filmes.append(m)
+    except Exception as e:
+        print(f"Erro ao buscar favoritos do perfil: {e}")
+
+    return render_template(
+        'perfil.html',
+        usuario=user['username'],
+        role=user.get('role', 'usuario'),
+        perfil=dados_perfil,
+        foto_url=foto_url,
+        favoritos_filmes=favoritos_filmes,
+        meu_user_id=user['user_id'],
+    )
+
+
+@app.route('/perfil/<int:user_id>/editar', methods=['POST'])
+def editar_perfil(user_id):
+    """Edita nome de exibição e bio. Só o dono do perfil pode editar —
+    o backend confere a identidade de quem está logado (user['user_id']
+    vindo do JWT validado pelo auth_service), e NUNCA confia no user_id
+    que vier no corpo da requisição além do que está na própria URL."""
+    user = get_current_user()
+    if not user:
+        return redirect(url_for('login'))
+
+    if user_id != int(user['user_id']):
+        log_event(user['user_id'], f'403_editar_perfil_negado:alvo_{user_id}')
+        abort(403)
+
+    nome_exibicao = (request.form.get('nome_exibicao') or user['username']).strip()[:100]
+    bio = (request.form.get('bio') or '').strip()[:280]
+
+    try:
+        db = get_db()
+        cursor = db.cursor()
+        cursor.execute("""
+            INSERT INTO perfis (user_id, nome_exibicao, bio)
+            VALUES (%s, %s, %s)
+            ON DUPLICATE KEY UPDATE nome_exibicao = VALUES(nome_exibicao), bio = VALUES(bio)
+        """, (user_id, nome_exibicao, bio))
+        db.commit()
+        cursor.close()
+        db.close()
+        log_event(user['user_id'], 'editar_perfil')
+        flash("Perfil atualizado!", "success")
+    except Exception as e:
+        print(f"Erro ao editar perfil: {e}")
+        flash("Erro ao atualizar o perfil.", "danger")
+
+    return redirect(url_for('perfil'))
+
+
+@app.route('/perfil/<int:user_id>/foto', methods=['POST'])
+def upload_foto_perfil(user_id):
+    """Upload da foto de perfil pro MinIO. Mesma checagem de identidade
+    da edição de perfil: só o dono pode trocar a própria foto, mesmo
+    manipulando o user_id na requisição."""
+    user = get_current_user()
+    if not user:
+        return redirect(url_for('login'))
+
+    if user_id != int(user['user_id']):
+        log_event(user['user_id'], f'403_upload_foto_negado:alvo_{user_id}')
+        abort(403)
+
+    arquivo = request.files.get('foto')
+    if not arquivo or arquivo.filename == '':
+        flash("Selecione uma imagem para enviar.", "danger")
+        return redirect(url_for('perfil'))
+
+    conteudo = arquivo.read()
+
+    if len(conteudo) > MAX_FOTO_SIZE_BYTES:
+        flash("Imagem maior que o limite de 2 MB.", "danger")
+        return redirect(url_for('perfil'))
+
+    # Não confia no Content-Type que o navegador mandou — abre a imagem de
+    # verdade com Pillow pra confirmar que é um arquivo de imagem válido.
+    try:
+        img = Image.open(io.BytesIO(conteudo))
+        img.verify()
+        formato = (img.format or '').lower()
+    except Exception:
+        flash("O arquivo enviado não é uma imagem válida.", "danger")
+        return redirect(url_for('perfil'))
+
+    if formato not in FORMATOS_AGEITOS:
+        flash("Formato não suportado. Envie uma imagem JPEG, PNG ou WEBP.", "danger")
+        return redirect(url_for('perfil'))
+
+    extensao = 'jpg' if formato == 'jpeg' else formato
+    object_key = f"perfis/{user_id}/{uuid.uuid4().hex}.{extensao}"
+    content_type = f"image/{formato}"
+
+    try:
+        db = get_db()
+        cursor = db.cursor(dictionary=True)
+        cursor.execute("SELECT foto_key FROM perfis WHERE user_id = %s", (user_id,))
+        row = cursor.fetchone()
+        foto_antiga = row['foto_key'] if row else None
+
+        minio_client.put_object(
+            MINIO_BUCKET, object_key, io.BytesIO(conteudo),
+            length=len(conteudo), content_type=content_type
+        )
+
+        cursor.execute("""
+            INSERT INTO perfis (user_id, nome_exibicao, bio, foto_key)
+            VALUES (%s, %s, '', %s)
+            ON DUPLICATE KEY UPDATE foto_key = VALUES(foto_key)
+        """, (user_id, user['username'], object_key))
+        db.commit()
+        cursor.close()
+        db.close()
+
+        if foto_antiga:
+            try:
+                minio_client.remove_object(MINIO_BUCKET, foto_antiga)
+            except Exception as e:
+                print(f"Aviso: não foi possível remover a foto antiga '{foto_antiga}': {e}")
+
+        log_event(user['user_id'], 'upload_foto_perfil')
+        flash("Foto de perfil atualizada!", "success")
+    except S3Error as e:
+        print(f"Erro MinIO ao enviar foto: {e}")
+        flash("Erro ao enviar a imagem pro armazenamento. Tente novamente.", "danger")
+    except Exception as e:
+        print(f"Erro ao salvar foto de perfil: {e}")
+        flash("Erro ao atualizar a foto de perfil.", "danger")
+
+    return redirect(url_for('perfil'))
 
 
 if __name__ == '__main__':

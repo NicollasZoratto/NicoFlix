@@ -9,16 +9,12 @@ app = Flask(__name__)
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 STREAM_KEY = os.getenv("LOG_STREAM_KEY", "nicoflix:logs")
-
-# Tamanho máximo do stream (Redis Streams suportam trim automático via
-# MAXLEN, evitando crescimento infinito de memória em produção).
 STREAM_MAXLEN = int(os.getenv("LOG_STREAM_MAXLEN", "10000"))
 
 _redis_client = None
 
 
 def get_redis():
-    """Conexão Redis reaproveitada entre requisições (lazy singleton)."""
     global _redis_client
     if _redis_client is None:
         _redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
@@ -36,9 +32,6 @@ def health():
 
 @app.route('/log', methods=['POST'])
 def registrar_evento():
-    """Recebe um evento de auditoria de qualquer serviço interno (auth_service
-    ou app_principal) e grava no Redis Stream. Estrutura mínima exigida:
-    usuario_id, acao, timestamp. IP é opcional (bônus)."""
     data = request.get_json() or {}
     usuario_id = data.get('usuario_id')
     acao = data.get('acao')
@@ -53,12 +46,7 @@ def registrar_evento():
         r = get_redis()
         entry_id = r.xadd(
             STREAM_KEY,
-            {
-                "usuario_id": str(usuario_id),
-                "acao": acao,
-                "timestamp": timestamp,
-                "ip": ip,
-            },
+            {"usuario_id": str(usuario_id), "acao": acao, "timestamp": timestamp, "ip": ip},
             maxlen=STREAM_MAXLEN,
             approximate=True,
         )
@@ -70,20 +58,13 @@ def registrar_evento():
 
 @app.route('/events', methods=['GET'])
 def listar_eventos():
-    """Retorna os últimos N eventos, do mais recente pro mais antigo.
-    Não é exposta pra fora do Docker (sem porta publicada); quem decide
-    se o usuário pode VER esses eventos é o app_principal, consultando o
-    papel (role) validado pelo auth_service — mesmo padrão da atividade 4."""
     limit = request.args.get('limit', default=50, type=int)
     limit = max(1, min(limit, 1000))
 
     try:
         r = get_redis()
         raw_entries = r.xrevrange(STREAM_KEY, count=limit)
-        eventos = [
-            {"id": entry_id, **fields}
-            for entry_id, fields in raw_entries
-        ]
+        eventos = [{"id": entry_id, **fields} for entry_id, fields in raw_entries]
         return jsonify({"events": eventos, "count": len(eventos)}), 200
     except Exception as e:
         print(f"[LOG SERVICE ERROR] Falha ao ler eventos do Redis: {e}")

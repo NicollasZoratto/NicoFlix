@@ -18,17 +18,14 @@ DB_PASSWORD = os.getenv("DB_PASSWORD", "nico11as")
 DB_NAME = os.getenv("DB_NAME", "IAC_2026_02_nicollas_carvalho")
 JWT_SECRET = os.getenv("JWT_SECRET", "chave_secreta_jwt_super_segura")
 
-# URL pública do catálogo (usada para montar o link de redefinição de senha)
 PUBLIC_APP_URL = os.getenv("PUBLIC_APP_URL", "http://localhost:8223")
 
-# Configuração de e-mail (Mailtrap em dev, Brevo em produção)
 SMTP_HOST = os.getenv("SMTP_HOST", "")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "2525"))
 SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASS = os.getenv("SMTP_PASS", "")
 SMTP_FROM = os.getenv("SMTP_FROM", "no-reply@nicoflix.local")
 
-# Serviço de logs/auditoria (Atividade 5) — container interno, sem porta publicada
 LOG_SERVICE_URL = os.getenv("LOG_SERVICE_URL", "http://log_service:5002")
 
 RESET_TOKEN_TTL_MINUTES = 30
@@ -38,15 +35,11 @@ codes_2fa = {}
 
 def get_db():
     return mysql.connector.connect(
-        host=DB_HOST,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        database=DB_NAME
+        host=DB_HOST, user=DB_USER, password=DB_PASSWORD, database=DB_NAME
     )
 
 
 def init_db():
-    """Cria (ou recria) as tabelas usadas pelo serviço de autenticação."""
     try:
         db = get_db()
         cursor = db.cursor()
@@ -63,8 +56,6 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        # reset_tokens não é derrubada no restart para não invalidar links em teste,
-        # mas é criada aqui caso ainda não exista.
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS reset_tokens (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -88,9 +79,6 @@ init_db()
 
 
 def log_event(usuario_id, acao, ip=None):
-    """Envia um evento de auditoria para o log_service. Nunca deve
-    quebrar o fluxo principal — se o log_service estiver fora do ar,
-    só loga o erro no console e segue a vida."""
     try:
         requests.post(
             f"{LOG_SERVICE_URL}/log",
@@ -102,19 +90,15 @@ def log_event(usuario_id, acao, ip=None):
 
 
 def send_email(to_email, subject, body):
-    """Envia e-mail via SMTP (Mailtrap/Brevo). Se não houver credenciais
-    configuradas, apenas loga o conteúdo no console (modo dev)."""
     if not SMTP_HOST or not SMTP_USER or not SMTP_PASS:
         print("[EMAIL - MODO DEV, SMTP NÃO CONFIGURADO] Para:", to_email)
         print(body)
         return True
-
     try:
         msg = MIMEText(body)
         msg['Subject'] = subject
         msg['From'] = SMTP_FROM
         msg['To'] = to_email
-
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
             server.starttls()
             server.login(SMTP_USER, SMTP_PASS)
@@ -144,7 +128,6 @@ def register_user():
             db.close()
             return jsonify({"error": "Usuário ou e-mail já cadastrado"}), 409
 
-        # o primeiro usuário cadastrado vira admin, os demais são 'usuario'
         cursor.execute("SELECT COUNT(*) as total FROM usuarios")
         total = cursor.fetchone()['total']
         role = 'admin' if total == 0 else 'usuario'
@@ -186,10 +169,7 @@ def login_user():
         codes_2fa[username] = code
         print(f"[2FA LOG] Código gerado para {username}: {code}")
 
-        return jsonify({
-            "message": "Credenciais válidas",
-            "dev_code": code
-        }), 200
+        return jsonify({"message": "Credenciais válidas", "dev_code": code}), 200
     except Exception as e:
         print(f"Erro no login: {e}")
         return jsonify({"error": f"Erro interno no login: {str(e)}"}), 500
@@ -277,7 +257,6 @@ def forgot_password():
         user = cursor.fetchone()
 
         if not user:
-            # Não revela se o e-mail existe ou não (evita enumeração de usuários)
             cursor.close()
             db.close()
             return jsonify(generic_response), 200
@@ -298,8 +277,7 @@ def forgot_password():
             f"Olá, {user['username']}!\n\n"
             f"Recebemos uma solicitação para redefinir sua senha no NicoFlix.\n"
             f"Clique no link abaixo para criar uma nova senha. Ele expira em {RESET_TOKEN_TTL_MINUTES} minutos:\n\n"
-            f"{link}\n\n"
-            f"Se você não pediu isso, pode ignorar este e-mail."
+            f"{link}\n\nSe você não pediu isso, pode ignorar este e-mail."
         )
         send_email(email, "NicoFlix - Redefinição de senha", corpo)
 
@@ -354,16 +332,13 @@ def reset_password():
         row = cursor.fetchone()
 
         if not row:
-            cursor.close()
-            db.close()
+            cursor.close(); db.close()
             return jsonify({"error": "Link inválido"}), 404
         if row['usado']:
-            cursor.close()
-            db.close()
+            cursor.close(); db.close()
             return jsonify({"error": "Este link já foi utilizado"}), 400
         if row['expira_em'] < datetime.datetime.utcnow():
-            cursor.close()
-            db.close()
+            cursor.close(); db.close()
             return jsonify({"error": "Link expirado. Solicite um novo."}), 400
 
         cursor.execute("UPDATE usuarios SET password = %s WHERE id = %s", (new_password, row['usuario_id']))
@@ -380,10 +355,6 @@ def reset_password():
 
 @app.route('/users', methods=['GET'])
 def list_users():
-    """Lista básica de usuários (id, username, role), usada pelo catálogo
-    para exibir nomes no painel de moderação e nos logs. Não expõe e-mail
-    nem senha. Só acessível dentro da rede interna do Docker (auth_service
-    não publica porta)."""
     try:
         db = get_db()
         cursor = db.cursor(dictionary=True)

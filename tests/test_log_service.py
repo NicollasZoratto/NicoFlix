@@ -3,13 +3,12 @@ from unittest.mock import patch, MagicMock
 
 def test_log_sem_campos_obrigatorios_retorna_400(log_app):
     client = log_app.app.test_client()
-    res = client.post('/log', json={"acao": "login"})  # falta usuario_id
+    res = client.post('/log', json={"acao": "login"})
     assert res.status_code == 400
 
 
 def test_log_evento_valido_grava_no_redis_stream(log_app):
     client = log_app.app.test_client()
-
     mock_redis = MagicMock()
     mock_redis.xadd.return_value = "1234567890-0"
 
@@ -19,7 +18,6 @@ def test_log_evento_valido_grava_no_redis_stream(log_app):
     assert res.status_code == 201
     assert res.get_json()['id'] == "1234567890-0"
 
-    # confirma que foi usado XADD (Redis Streams), com os campos mínimos exigidos
     args, kwargs = mock_redis.xadd.call_args
     stream_key, fields = args
     assert stream_key == log_app.STREAM_KEY
@@ -31,7 +29,6 @@ def test_log_evento_valido_grava_no_redis_stream(log_app):
 
 def test_listar_eventos_retorna_do_mais_recente_pro_mais_antigo(log_app):
     client = log_app.app.test_client()
-
     mock_redis = MagicMock()
     mock_redis.xrevrange.return_value = [
         ("2-0", {"usuario_id": "1", "acao": "logout", "timestamp": "t2", "ip": ""}),
@@ -44,7 +41,7 @@ def test_listar_eventos_retorna_do_mais_recente_pro_mais_antigo(log_app):
     data = res.get_json()
     assert res.status_code == 200
     assert data['count'] == 2
-    assert data['events'][0]['acao'] == 'logout'  # mais recente primeiro
+    assert data['events'][0]['acao'] == 'logout'
     mock_redis.xrevrange.assert_called_once_with(log_app.STREAM_KEY, count=10)
 
 

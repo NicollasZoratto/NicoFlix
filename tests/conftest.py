@@ -22,13 +22,9 @@ def _load_module(unique_name, file_path):
 
 @pytest.fixture
 def auth_app():
-    """Importa o auth_service/app.py com o mysql.connector mockado, pra
-    não tentar abrir conexão real com o MariaDB remoto durante o import
-    (o init_db() roda automaticamente ao carregar o módulo)."""
     mock_cursor = MagicMock()
     mock_cursor.fetchone.return_value = None
     mock_cursor.fetchall.return_value = []
-
     mock_conn = MagicMock()
     mock_conn.cursor.return_value = mock_cursor
 
@@ -42,16 +38,20 @@ def auth_app():
 
 @pytest.fixture
 def catalog_app():
-    """Importa o app_principal/app.py com o mysql.connector mockado (o
-    init_app_tables() também roda no import)."""
+    """Importa o app_principal/app.py com mysql.connector E o cliente
+    MinIO mockados (o init_app_tables()/init_minio_bucket() rodam no
+    import, e não queremos tocar num MinIO/MariaDB de verdade aqui)."""
     mock_cursor = MagicMock()
     mock_cursor.fetchone.return_value = None
     mock_cursor.fetchall.return_value = []
-
     mock_conn = MagicMock()
     mock_conn.cursor.return_value = mock_cursor
 
-    with patch('mysql.connector.connect', return_value=mock_conn):
+    mock_minio_instance = MagicMock()
+    mock_minio_instance.bucket_exists.return_value = True
+
+    with patch('mysql.connector.connect', return_value=mock_conn), \
+         patch('minio.Minio', return_value=mock_minio_instance):
         module = _load_module(
             'nicoflix_app_principal_app',
             os.path.join(BASE_DIR, 'app_principal', 'app.py')
@@ -61,8 +61,6 @@ def catalog_app():
 
 @pytest.fixture
 def log_app():
-    """O log_service não faz nada com Redis no import (conexão é lazy),
-    então pode ser importado direto."""
     module = _load_module(
         'nicoflix_log_service_app',
         os.path.join(BASE_DIR, 'log_service', 'app.py')

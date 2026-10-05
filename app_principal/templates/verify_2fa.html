@@ -1,27 +1,18 @@
 <!DOCTYPE html>
 <html lang="pt-br">
-
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NicoFlix — Verificação em 2 Etapas</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <style>
-    input[name="code"] {
-      letter-spacing: 0.6rem;
-      text-align: center;
-      font-size: 1.4rem;
-      font-weight: 700;
-    }
+    input[name="code"] { letter-spacing: 0.6rem; text-align: center; font-size: 1.4rem; font-weight: 700; }
   </style>
 </head>
-
 <body>
   <div class="auth-container">
     <h2>NicoFlix</h2>
-    <p class="auth-subtitle">
-      Digite o código de verificação enviado para <strong>{{ username }}</strong>
-    </p>
+    <p class="auth-subtitle">Digite o código de verificação enviado para <strong>{{ username }}</strong></p>
 
     {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
@@ -44,5 +35,4 @@
     </div>
   </div>
 </body>
-
 </html>

@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NicoFlix — Meu Perfil</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+
+<body>
+  <div class="container">
+    <div class="glass-panel">
+      <div class="top-bar">
+        <h1>👤 Meu Perfil</h1>
+        <div class="user-info">
+          <span class="badge {{ 'admin' if role == 'admin' else '' }}">{{ role }}</span>
+          <a href="{{ url_for('index') }}" class="btn-secondary">← Voltar ao catálogo</a>
+          <a href="/logout" class="btn-logout">Sair</a>
+        </div>
+      </div>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+      {% for category, message in messages %}
+      <div class="alert alert-{{ category }}">{{ message }}</div>
+      {% endfor %}
+      {% endif %}
+      {% endwith %}
+
+      <div class="profile-header">
+        {% if foto_url %}
+        <img src="{{ foto_url }}" alt="Foto de {{ perfil.nome_exibicao }}" class="avatar">
+        {% else %}
+        <div class="avatar-placeholder">{{ (perfil.nome_exibicao or usuario)[0]|upper }}</div>
+        {% endif %}
+        <div>
+          <div class="movie-title" style="font-size: 1.3rem;">{{ perfil.nome_exibicao or usuario }}</div>
+          <p class="profile-bio">{{ perfil.bio or 'Sem bio ainda — conte um pouco sobre você.' }}</p>
+        </div>
+      </div>
+
+      <div class="profile-grid">
+        <div>
+          <h3 style="margin-bottom: 0.9rem; font-size: 1rem;">Editar perfil</h3>
+
+          <form action="{{ url_for('editar_perfil', user_id=meu_user_id) }}" method="POST" style="margin-bottom: 1.5rem;">
+            <div class="form-group">
+              <label>Nome de exibição</label>
+              <input type="text" name="nome_exibicao" value="{{ perfil.nome_exibicao or usuario }}" maxlength="100">
+            </div>
+            <div class="form-group">
+              <label>Bio curta</label>
+              <textarea name="bio" rows="3" maxlength="280" placeholder="Conte um pouco sobre você...">{{ perfil.bio or '' }}</textarea>
+              <span class="hint">Até 280 caracteres.</span>
+            </div>
+            <button type="submit">💾 Salvar perfil</button>
+          </form>
+
+          <h3 style="margin-bottom: 0.9rem; font-size: 1rem;">Foto de perfil</h3>
+          <form action="{{ url_for('upload_foto_perfil', user_id=meu_user_id) }}" method="POST" enctype="multipart/form-data">
+            <div class="file-input-wrapper">
+              <input type="file" name="foto" accept="image/jpeg,image/png,image/webp" required>
+              <span class="hint">JPEG, PNG ou WEBP — até 2 MB.</span>
+            </div>
+            <button type="submit" style="margin-top: 0.8rem;">⬆️ Enviar foto</button>
+          </form>
+        </div>
+
+        <div>
+          <h3 style="margin-bottom: 0.9rem; font-size: 1rem;">⭐ Filmes favoritados ({{ favoritos_filmes|length }})</h3>
+
+          {% if favoritos_filmes %}
+          <div class="movie-grid" style="grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 1rem;">
+            {% for f in favoritos_filmes %}
+            <div class="movie-card" style="padding: 0.7rem;">
+              {% if f.poster_path %}
+              <img src="https://image.tmdb.org/t/p/w300{{ f.poster_path }}" alt="{{ f.title }}" style="margin-bottom: 0.5rem;">
+              {% endif %}
+              <div class="movie-title" style="font-size: 0.88rem;">{{ f.title }}</div>
+              <span class="movie-meta">📅 {{ f.release_date[:4] if f.release_date else 'N/A' }}</span>
+            </div>
+            {% endfor %}
+          </div>
+          {% else %}
+          <p class="empty-state">Você ainda não favoritou nenhum filme. <a href="{{ url_for('index') }}" class="link-muted">Volte pro catálogo</a> e favorite alguns!</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+
+</html>

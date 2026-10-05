@@ -1,13 +1,11 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
-
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NicoFlix — Moderação de Comentários</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-
 <body>
   <div class="container">
     <div class="glass-panel">
@@ -32,12 +30,7 @@
       <div class="table-wrapper">
         <table>
           <thead>
-            <tr>
-              <th>Usuário</th>
-              <th>Filme</th>
-              <th>Comentário</th>
-              <th>Ação</th>
-            </tr>
+            <tr><th>Usuário</th><th>Filme</th><th>Comentário</th><th>Ação</th></tr>
           </thead>
           <tbody>
             {% for c in comentarios %}
@@ -64,5 +57,4 @@
     </div>
   </div>
 </body>
-
 </html>

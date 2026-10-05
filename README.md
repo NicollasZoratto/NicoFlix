@@ -4,131 +4,127 @@ Projeto desenvolvido para a disciplina de Cloud Computing na FATEC.
 
 ## 👨‍🏫 Professor Responsável
 
-- Professor **@siriani**
+- Professor **@siriani** — [github.com/siriani](https://github.com/siriani)
 
 ## 🚀 Arquitetura e Tecnologias
 
 - **Consumo de API:** TMDB (The Movie Database) para dados e pôsteres em tempo real.
-- **Backend:** Python / Flask, dividido em três containers (`web`, `auth_service`, `log_service`) + `redis`.
-- **Persistência de Dados:** MariaDB / MySQL (usuários, papéis, favoritos e comentários) + Redis Streams (log de auditoria).
+- **Backend:** Python / Flask, dividido em três containers (`web`, `auth_service`, `log_service`) + `redis` + `minio`.
+- **Persistência de Dados:** MariaDB / MySQL (usuários, papéis, favoritos, comentários, perfis) + Redis Streams (log de auditoria) + MinIO (fotos de perfil).
 - **Containerização:** Docker e Portainer.
 
 ```
-Navegador ──HTTPS──▶ web (único ponto público, :8223)
-                        │
-                        ├──rede interna──▶ auth_service (login, papéis, esqueci-senha)
-                        │                        │
-                        │                        └──envia e-mail──▶ Mailtrap/Brevo (SMTP)
-                        │
-                        └──rede interna──▶ log_service (auditoria) ──▶ redis (Streams)
+Navegador ──HTTPS──▶ web (único ponto público de app, :8223)
+             │
+             ├──rede interna──▶ auth_service (login, papéis, esqueci-senha)
+             │                        └──envia e-mail──▶ Mailtrap/Brevo (SMTP)
+             │
+             ├──rede interna──▶ log_service (auditoria) ──▶ redis (Streams)
+             │
+             └──direto (URL pré-assinada)──▶ minio :9000 (fotos de perfil)
 ```
 
-`auth_service`, `log_service` e `redis` **não publicam porta pro host** — só são alcançáveis de dentro da rede Docker (`nicoflix-net`). O `web` continua sendo o único ponto de entrada público.
+`auth_service`, `log_service` e `redis` não publicam porta pro host — só acessíveis pela rede interna do Docker. O `minio` é a **única exceção**: sua porta de API (9000) precisa ficar pública, porque é o navegador do usuário — não o backend — quem busca a foto direto de lá (ver seção MinIO abaixo).
 
 ## 🔐 Autenticação e papéis (Atividades 3 e 4)
 
-- **Papéis de usuário:** cada usuário tem uma coluna `role` (`usuario` ou `admin`). O primeiro usuário cadastrado vira `admin` automaticamente; os demais recebem `usuario`. O papel viaja dentro do JWT emitido pelo `auth_service` e é devolvido por `/validate-token`, pra o catálogo consultar sempre que precisar.
-- **Esqueci minha senha:** usuário informa e-mail → `auth_service` gera token (`reset_tokens`: `token`, `usuario_id`, `criado_em`, `expira_em`, `usado`) válido por **30 minutos** → envia e-mail com link → catálogo valida o token (existe? não usado? não expirado?) antes de deixar redefinir a senha.
+- **Papéis de usuário:** cada usuário tem uma coluna `role` (`usuario` ou `admin`). O primeiro usuário cadastrado vira `admin` automaticamente.
+- **Esqueci minha senha:** token com expiração de 30 minutos, enviado por e-mail.
 
 ### Permissões por papel
 
-**`usuario` (padrão de todo cadastro, exceto o primeiro):**
-- Login / cadastro / logout e redefinição de senha.
-- Ver o catálogo, favoritar/desfavoritar filmes.
-- Criar, editar e apagar o **próprio** comentário.
+**`usuario`:** login/cadastro/logout, redefinição de senha, ver catálogo, favoritar/desfavoritar, criar/editar/apagar o **próprio** comentário, **editar o próprio perfil e trocar a própria foto**.
 
-**`admin` (tudo que `usuario` pode, mais):**
-- Acessar o painel de moderação `/admin/comentarios` e apagar o comentário de **qualquer usuário**.
-- Acessar o painel de auditoria `/admin/logs` e consultar os últimos eventos do sistema.
-
-### Ação exclusiva de admin e enforcement
-
-Apagar comentário de outro usuário usa o mesmo endpoint (`POST /comentar/excluir`) que apagar o próprio: o backend compara o `user_id` do comentário-alvo com o `user_id` de quem está autenticado. Se forem diferentes, só `role == "admin"` passa — senão, **403 Forbidden**, mesmo chamando a rota direto (Postman/curl), sem passar pela tela. O mesmo vale para `/admin/comentarios` e `/admin/logs`. O papel usado nessa checagem vem do JWT decodificado pelo `auth_service`, nunca de algo que o cliente mandou.
+**`admin` (tudo que `usuario` pode, mais):** apagar comentário de **qualquer usuário** (`/admin/comentarios`), consultar os logs de auditoria (`/admin/logs`).
 
 ### Padrão A ou B?
 
-Hoje o projeto usa, na prática, o **Padrão A (enforcement centralizado)** — mesmo o papel estando dentro do JWT como claim. O catálogo não tem o `JWT_SECRET`, então não consegue validar o token sozinho: em toda requisição autenticada ele chama `POST /validate-token` no `auth_service`, que decodifica o JWT e devolve `role`. Ou seja, toda ação sensível já depende de uma ida-e-volta de rede — na prática, o mesmo custo e o mesmo ponto único de falha do Padrão A.
-
-Pra migrar pro **Padrão B (claims no token)** de verdade, o catálogo precisaria verificar a assinatura do JWT sozinho — compartilhando o `JWT_SECRET` (HS256, como hoje) ou, melhor, usando um par de chaves assimétrico (RS256: `auth_service` assina com a chave privada, catálogo valida com a pública). Aí o catálogo decodificaria o token localmente com `pyjwt`, sem chamar `/validate-token`. Vantagem: menos latência e um serviço a menos no caminho crítico. Desvantagem: se o papel de alguém mudar no banco, só teria efeito quando o token expirasse — hoje, como cada ação já bate no `auth_service`, a mudança tem efeito imediato na próxima requisição.
+Na prática, **Padrão A (enforcement centralizado)**: o catálogo não tem o `JWT_SECRET`, então chama `/validate-token` no `auth_service` a cada ação — o mesmo custo de rede do Padrão A, mesmo o papel estando dentro do JWT. Pra virar Padrão B de verdade, precisaria compartilhar a chave (ou migrar pra RS256 com chave pública) e decodificar localmente, trocando latência menor por mudanças de papel só surtirem efeito quando o token expirar.
 
 ## 📜 Logs e auditoria (Atividade 5)
 
-Novo microsserviço `log_service`, container separado, mesma rede interna do Docker, sem porta publicada — mesmo princípio do `auth_service`.
+Microsserviço `log_service`, Redis Streams (`XADD`/`XREVRANGE`), sem porta publicada. Loga login, logout, favoritar/desfavoritar, comentar, apagar comentário, **editar perfil, trocar foto de perfil**, e todo 403 (moderação, logs, comentário de outro, **editar perfil de outro, upload de foto de outro**). Consulta em `/admin/logs`, só admin.
 
-### Eventos logados
+## 👤 Perfil e foto (Atividade 6)
 
-| Evento | Onde é logado |
-|---|---|
-| `login` | `auth_service`, ao concluir o 2FA com sucesso |
-| `logout` | `web`, antes de limpar a sessão |
-| `favoritar` / `desfavoritar` | `web`, na rota `/favoritar` |
-| `comentar` | `web`, na rota `/comentar` |
-| `apagar_comentario_proprio` / `apagar_comentario_moderacao` | `web`, na rota `/comentar/excluir` |
-| `403_apagar_comentario_negado` | `web`, quando um `usuario` tenta apagar comentário de outra pessoa |
-| `403_acesso_moderacao_negado` | `web`, quando um `usuario` tenta acessar `/admin/comentarios` |
-| `403_acesso_logs_negado` | `web`, quando um `usuario` tenta acessar `/admin/logs` |
+### Página de perfil
 
-Tentativas negadas por permissão (403) são o evento mais valioso pra auditoria de segurança — são logadas mesmo que a ação nunca chegue a acontecer.
+`/perfil` mostra nome de exibição, bio (até 280 caracteres), foto, e a lista de filmes favoritados (reaproveitando a tabela `favoritos` que já existe desde a atividade 2) — formato de perfil de rede social simples. Os dados ficam numa tabela nova, `perfis`, na mesma base do catálogo:
 
-### Estrutura de cada log
-
-```
-usuario_id   — quem executou a ação
-acao         — string da ação (ex: "favoritar:filme_31562")
-timestamp    — ISO 8601 em UTC, gerado no próprio log_service
-ip           — request.remote_addr de quem fez a chamada (bônus)
+```sql
+CREATE TABLE perfis (
+    user_id INT PRIMARY KEY,
+    nome_exibicao VARCHAR(100) NOT NULL,
+    bio VARCHAR(280) NOT NULL DEFAULT '',
+    foto_key VARCHAR(255),              -- chave do objeto no MinIO, não a imagem em si
+    atualizado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+)
 ```
 
-### Por que Redis Streams (`XADD`) e não uma lista
+Ficou numa tabela própria do catálogo (não dentro de `usuarios`, que pertence ao `auth_service`) pelo mesmo motivo que `comentarios`/`favoritos` já são do catálogo: é conteúdo social/de perfil, não dado de identidade/autenticação.
 
-Optamos pelo Redis Streams, como recomendado, em vez de uma lista simples (`LPUSH`/`RPUSH`), por três motivos:
-1. **IDs ordenáveis e únicos de fábrica** — cada entrada recebe um ID tipo `<timestamp>-<seq>`, então a ordem cronológica vem de graça, sem precisar de um campo auxiliar de ordenação.
-2. **Leitura em intervalo sem reprocessar tudo** — `XREVRANGE` já devolve do mais recente pro mais antigo com `COUNT`, sem precisar carregar a lista inteira e inverter em código.
-3. **Trim automático de memória** — usamos `XADD ... MAXLEN ~ 10000`, então o stream nunca cresce sem limite; numa lista simples isso teria que ser controlado manualmente.
+### Upload de foto → MinIO + MariaDB
 
-### Endpoint de consulta — só admin
+1. O arquivo chega em `POST /perfil/<user_id>/foto`, como `multipart/form-data`.
+2. **Validação antes de aceitar:**
+   - Tamanho: rejeitado se passar de **2 MB** (`MAX_FOTO_SIZE_BYTES`).
+   - Tipo: não confiamos no `Content-Type` que o navegador manda (é só um header, fácil de forjar) — abrimos o arquivo de verdade com **Pillow** (`Image.open(...).verify()`) e só aceitamos se decodificar como JPEG, PNG ou WEBP.
+3. O arquivo vai pro MinIO com uma chave única (`perfis/<user_id>/<uuid>.<ext>`), no bucket **`nicoflix-perfis`**.
+4. Só a **chave do objeto** (`foto_key`) é salva no MariaDB, na tabela `perfis` — nunca a imagem em si.
+5. A foto antiga (se houver) é apagada do MinIO ao trocar, pra não acumular lixo no bucket.
 
-`GET /admin/logs` no catálogo (`web`) lista os últimos 100 eventos, do mais recente pro mais antigo, com nome de usuário (buscado no `auth_service`) em vez de só o ID. Protegido pelo mesmo controle de acesso da atividade 4: usuário comum recebe **403**, mesmo acessando a URL direto — igual em `/admin/comentarios`.
+### Exibir a imagem de volta — bucket público vs. URL pré-assinada
 
-O `log_service` em si não tem checagem de papel nas suas rotas (`/log`, `/events`) porque ele não é alcançável de fora da rede Docker — quem decide se um usuário pode *ver* os eventos é sempre o catálogo, consultando o papel validado pelo `auth_service`, nunca o `log_service` diretamente.
+**Decisão: URL pré-assinada (temporária), não bucket público.**
 
-### Demonstração prática
+| | Bucket público | URL pré-assinada (escolhida) |
+|---|---|---|
+| Simplicidade | Mais simples — só salva a URL fixa | Precisa gerar uma URL nova a cada vez que a página carrega |
+| Controle de acesso | Qualquer um com o link vê a foto pra sempre, mesmo depois de trocada/removida | Expira em **1 hora** (`PRESIGNED_URL_EXPIRY_SECONDS`); passou disso, o link não funciona mais |
+| Exposição | O bucket inteiro fica de leitura pública — se alguém adivinhar/vazar uma chave de outro objeto, também vê | Cada URL só dá acesso a UM objeto específico, por tempo limitado |
+| Troca de assunto de privacidade | Foto "deletada" ainda é alcançável por quem guardou o link antigo (cache, histórico) | Link velho simplesmente para de funcionar |
 
-1. Login como `usuario` comum → favoritar um filme → comentar → tentar abrir `/admin/logs` (403).
-2. Login como `admin` → abrir `/admin/logs` → os quatro eventos do passo 1 aparecem na ordem certa, incluindo o `403_acesso_logs_negado`.
+Optamos pela URL pré-assinada porque o trade-off de "gerar de novo a cada carregamento de página" é barato (é só uma assinatura criptográfica local, não uma chamada de rede extra) e o ganho de controle — expiração automática, sem depender de lembrar de revogar nada — compensa a complexidade extra. A implementação usa dois clientes MinIO no `app_principal`: um com o endpoint **interno** (`minio:9000`, rede Docker, rápido) pra upload/remoção reais, e outro com o endpoint **público** (`PUBLIC_MINIO_ENDPOINT`, ex: `localhost:9000` ou o IP do servidor) só pra **assinar** a URL que o navegador vai usar — por isso a porta 9000 do MinIO precisa estar publicada, diferente dos outros serviços internos deste projeto.
+
+### Cada um só edita o próprio perfil
+
+`POST /perfil/<user_id>/editar` e `POST /perfil/<user_id>/foto` conferem `user_id` (da URL) contra o `user_id` de quem está logado (vindo do JWT validado pelo `auth_service`, nunca do corpo da requisição). Diferente → **403**, mesmo chamando direto pelo Postman/curl com a sessão de outro usuário. Mesma lógica das atividades 4/5, reaproveitada aqui.
 
 ## ✉️ E-mail via Mailtrap
 
-1. Copie `.env.example` para `.env` (esse arquivo fica fora do Git — veja `.gitignore`).
-2. Crie uma conta gratuita em [mailtrap.io](https://mailtrap.io), abra **Email Testing → Inboxes → (sua inbox) → SMTP Settings** e copie host/porta/usuário/senha da aba "Flask" ou "Python".
-3. Preencha `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` no `.env`.
-4. `docker-compose up --build` lê o `.env` automaticamente.
+1. Copie `.env.example` para `.env`.
+2. Preencha `SMTP_HOST`, `SMTP_USER`, `SMTP_PASS` com as credenciais da sua inbox em [mailtrap.io](https://mailtrap.io) (Email Testing → Inboxes → SMTP Settings → aba "Flask"/"Python").
+3. Sem isso preenchido, o link de redefinição só aparece no log do `auth_service`.
 
-Sem essas variáveis preenchidas, o e-mail não é enviado de verdade — o link de redefinição só aparece no log do container `auth_service` (`docker-compose logs -f auth_service`), o que ainda é suficiente pra testar o fluxo localmente.
+## 🪣 MinIO — configuração
+
+No `.env`, ajuste:
+- `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` — credenciais administrativas do MinIO (troque o padrão em produção).
+- `PUBLIC_MINIO_ENDPOINT` — host:porta que o **navegador** do usuário vai acessar. Em dev local: `localhost:9000`. No Portainer/produção: o IP público ou domínio do servidor + `:9000`.
+- O console web do MinIO (porta 9001) fica disponível em `http://<host>:9001` pra inspecionar o bucket manualmente, se precisar — login com `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD`.
 
 ## 🧪 Testes
-
-Testes automatizados com `pytest`, mockando banco (MySQL), Redis e chamadas HTTP entre serviços — não precisa de containers rodando pra executar.
 
 ```bash
 pip install --break-system-packages -r auth_service/requirements.txt -r app_principal/requirements.txt -r log_service/requirements.txt -r tests/requirements-dev.txt
 python -m pytest tests/ -v
 ```
 
-Cobertura atual (20 testes): papel do primeiro usuário cadastrado, login/JWT, `/forgot-password` sem revelar existência de e-mail, 403 em `/admin/comentarios` e `/admin/logs` pra usuário comum, exclusão de comentário próprio vs. de terceiros, favoritar/desfavoritar com log gerado, e as rotas do `log_service` (`/log`, `/events`, `/health`).
+26 testes (mockando MySQL, Redis e MinIO — não precisa de containers rodando), incluindo: papel do primeiro usuário, login/JWT, 403 em moderação/logs/comentário de terceiro, **403 ao editar perfil ou trocar foto de outro usuário**, **rejeição de arquivo que não é imagem**, **rejeição de arquivo acima do limite de tamanho**, e upload válido salvando no MinIO + MariaDB.
 
 ## 🎨 Front-end
 
-Paleta trocada de roxo/rosa pra um tema índigo/ciano mais sóbrio (`app_principal/static/style.css`), com tipografia (Inter + Space Grotesk), cards de filme com proporção de pôster fixa, badge dourado pra `admin` vs. cinza pra `usuario`, e as telas de login/2FA/esqueci-senha/moderação/logs todas usando o mesmo sistema de design (sem depender mais do Bootstrap).
+Paleta índigo/ciano, tipografia Inter + Space Grotesk, sem depender de Bootstrap. Nova página de perfil com avatar circular, placeholder com inicial do nome quando não há foto, e grid de favoritos reaproveitando o estilo dos cards do catálogo.
 
-## 🐛 Correções feitas nas revisões anteriores
+## 📸 Demonstração (para entrega)
 
-- `templates/verify_2fa.html` não existia — a rota `/verify-2fa` sempre quebrava com `TemplateNotFound` (500). Corrigido.
-- `index.html` usava variáveis (`usuario`, `filmes`) diferentes das que o `app.py` passava (`username`, `movies`), e chamava `favoritos.get(...)` como se fosse dicionário — mas é lista. Corrigido.
-- O formulário de comentário postava pra `/` (só aceita GET) com campos que não batiam com a rota `/comentar`. Favoritar e comentar viraram ações separadas, cada uma na sua rota.
+- Print do perfil com a foto enviada aparecendo de verdade (upload → `/perfil` mostrando o avatar).
+- Print da tentativa de `POST /perfil/<id-de-outro-usuário>/editar` (ou `/foto`) logado como outro usuário, mostrando o **403**.
+- `docker-compose.yml` com o serviço `minio` (ver acima).
 
 ## 🔒 Segurança
 
-- Credenciais sensíveis (TMDB, banco, JWT, SMTP) vêm de variáveis de ambiente, lidas de um `.env` local (veja `.env.example`) — o `.env` de verdade nunca é commitado (`.gitignore`).
-- `auth_service`, `log_service` e `redis` não publicam porta pro host — só acessíveis pela rede interna do Docker.
-- `/forgot-password` sempre devolve a mesma mensagem genérica, exista ou não o e-mail, pra não permitir enumerar usuários cadastrados.
+- Credenciais sensíveis vêm de `.env` (fora do Git — `.gitignore`), nunca hardcoded no `docker-compose.yml` versionado.
+- `auth_service`, `log_service` e `redis` não publicam porta; `minio` publica só a API (9000), necessária pras URLs pré-assinadas funcionarem — o console (9001) é opcional/debug.
+- Upload de foto valida tipo por conteúdo real (Pillow), não por header, e limita tamanho antes de qualquer gravação.
+- `/forgot-password` sempre devolve a mesma mensagem genérica, evitando enumeração de usuários.
