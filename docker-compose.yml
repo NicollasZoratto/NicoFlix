@@ -39,8 +39,12 @@ services:
       - MINIO_ROOT_USER=${MINIO_ROOT_USER:-nicoflix_admin}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-nicoflix_minio_secret}
     ports:
-      - "9000:9000"   # API S3 — precisa ser pública (ver nota acima)
-      - "9001:9001"   # Console web do MinIO — só pra administração/debug
+      # Servidor compartilhado entre vários alunos: a porta padrão (9000)
+      # frequentemente já está em uso por outra pessoa. Defina
+      # MINIO_API_HOST_PORT / MINIO_CONSOLE_HOST_PORT com uma porta sua
+      # nas variáveis de ambiente da stack, se a padrão estiver ocupada.
+      - "${MINIO_API_HOST_PORT:-9000}:9000"   # API S3 — precisa ser pública (ver nota acima)
+      - "${MINIO_CONSOLE_HOST_PORT:-9001}:9001"   # Console web do MinIO — só pra administração/debug
     volumes:
       - minio_data:/bitnami/minio/data
     networks:
@@ -88,6 +92,8 @@ services:
       # MinIO: endpoint interno (upload real, via rede Docker) e endpoint
       # público (só pra assinar a URL que o navegador vai usar)
       - MINIO_INTERNAL_ENDPOINT=minio:9000
+      # Se você mudou MINIO_API_HOST_PORT acima, troque o ":9000" aqui
+      # pra bater com a mesma porta (ex: localhost:19000)
       - MINIO_PUBLIC_ENDPOINT=${PUBLIC_MINIO_ENDPOINT:-localhost:9000}
       - MINIO_ROOT_USER=${MINIO_ROOT_USER:-nicoflix_admin}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-nicoflix_minio_secret}
