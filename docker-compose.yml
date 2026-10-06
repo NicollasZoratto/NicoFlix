@@ -25,10 +25,16 @@ services:
   # A porta 9000 (API S3) PRECISA ficar publicada: diferente do auth_service/
   # log_service/redis, é o NAVEGADOR do usuário que busca a imagem direto do
   # MinIO via URL pré-assinada — não dá pra deixar só na rede interna.
+  #
+  # Imagem: a MinIO removeu minio/minio e minio/mc do Docker Hub em
+  # 11/09/2026 (projeto community arquivado em abril/2026), e o
+  # quay.io/minio/minio fechou pull anônimo em 24/09/2026. Por isso usamos
+  # bitnamilegacy/minio, que republica o mesmo binário e continua público.
+  # Diferenças: não precisa de "command" (a imagem já sobe o servidor
+  # sozinha) e os dados ficam em /bitnami/minio/data, não em /data.
   minio:
-    image: minio/minio:latest
+    image: bitnamilegacy/minio:latest
     container_name: nicoflix_minio
-    command: server /data --console-address ":9001"
     environment:
       - MINIO_ROOT_USER=${MINIO_ROOT_USER:-nicoflix_admin}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-nicoflix_minio_secret}
@@ -36,7 +42,7 @@ services:
       - "9000:9000"   # API S3 — precisa ser pública (ver nota acima)
       - "9001:9001"   # Console web do MinIO — só pra administração/debug
     volumes:
-      - minio_data:/data
+      - minio_data:/bitnami/minio/data
     networks:
       - nicoflix-net
 
