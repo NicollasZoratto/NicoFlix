@@ -24,7 +24,7 @@ Navegador ──HTTPS──▶ web (único ponto público de app, :8223)
              └──direto (URL pré-assinada)──▶ minio :9000 (fotos de perfil)
 ```
 
-`auth_service`, `log_service` e `redis` não publicam porta pro host — só acessíveis pela rede interna do Docker. O `minio` é a **única exceção**: sua porta de API (9000) precisa ficar pública, porque é o navegador do usuário — não o backend — quem busca a foto direto de lá (ver seção MinIO abaixo).
+`auth_service`, `log_service` e `redis` não publicam porta pro host — só acessíveis pela rede interna do Docker. O `minio` é a **única exceção**: sua porta de API (9000) precisa ficar pública, porque é o navegador do usuário — não o backend — quem busca a foto direto de lá. A porta publicada é alta (`29517`) para não colidir com outros alunos no servidor compartilhado (ver seção MinIO abaixo).
 
 ## 🔐 Autenticação e papéis (Atividades 3 e 4)
 
@@ -84,7 +84,7 @@ Ficou numa tabela própria do catálogo (não dentro de `usuarios`, que pertence
 | Exposição | O bucket inteiro fica de leitura pública — se alguém adivinhar/vazar uma chave de outro objeto, também vê | Cada URL só dá acesso a UM objeto específico, por tempo limitado |
 | Troca de assunto de privacidade | Foto "deletada" ainda é alcançável por quem guardou o link antigo (cache, histórico) | Link velho simplesmente para de funcionar |
 
-Optamos pela URL pré-assinada porque o trade-off de "gerar de novo a cada carregamento de página" é barato (é só uma assinatura criptográfica local, não uma chamada de rede extra) e o ganho de controle — expiração automática, sem depender de lembrar de revogar nada — compensa a complexidade extra. A implementação usa dois clientes MinIO no `app_principal`: um com o endpoint **interno** (`minio:9000`, rede Docker, rápido) pra upload/remoção reais, e outro com o endpoint **público** (`PUBLIC_MINIO_ENDPOINT`, ex: `localhost:9000` ou o IP do servidor) só pra **assinar** a URL que o navegador vai usar — por isso a porta 9000 do MinIO precisa estar publicada, diferente dos outros serviços internos deste projeto.
+Optamos pela URL pré-assinada porque o trade-off de "gerar de novo a cada carregamento de página" é barato (é só uma assinatura criptográfica local, não uma chamada de rede extra) e o ganho de controle — expiração automática, sem depender de lembrar de revogar nada — compensa a complexidade extra. A implementação usa dois clientes MinIO no `app_principal`: um com o endpoint **interno** (`minio:9000`, rede Docker, rápido) pra upload/remoção reais, e outro com o endpoint **público** (deduzido do endereço aberto no navegador + `MINIO_API_HOST_PORT`, padrão `29517`) só pra **assinar** a URL que o navegador vai usar — por isso a porta 9000 do MinIO precisa estar publicada, diferente dos outros serviços internos deste projeto.
 
 ### Cada um só edita o próprio perfil
 
@@ -100,8 +100,8 @@ Optamos pela URL pré-assinada porque o trade-off de "gerar de novo a cada carre
 
 No `.env`, ajuste:
 - `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` — credenciais administrativas do MinIO (troque o padrão em produção).
-- `PUBLIC_MINIO_ENDPOINT` — host:porta que o **navegador** do usuário vai acessar. Em dev local: `localhost:9000`. No Portainer/produção: o IP público ou domínio do servidor + `:9000`.
-- O console web do MinIO (porta 9001) fica disponível em `http://<host>:9001` pra inspecionar o bucket manualmente, se precisar — login com `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD`.
+- `MINIO_API_HOST_PORT` — porta do host onde a API do MinIO é publicada (padrão `29517`; troque se estiver ocupada). `PUBLIC_MINIO_ENDPOINT` pode ficar vazio: o app usa o mesmo host que você abriu no navegador.
+- O console web do MinIO (9001) não é publicado, para evitar conflito de porta no servidor compartilhado.
 
 ## 🧪 Testes
 

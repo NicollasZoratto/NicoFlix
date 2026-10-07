@@ -27,7 +27,12 @@ DB_NAME = os.getenv("DB_NAME", "IAC_2026_02_nicollas_carvalho")
 MINIO_INTERNAL_ENDPOINT = os.getenv("MINIO_INTERNAL_ENDPOINT", "minio:9000")
 # Endpoint PÚBLICO: usado só pra MONTAR a URL pré-assinada, porque é o navegador do
 # usuário (não o container) que vai baixar a imagem direto do MinIO.
-MINIO_PUBLIC_ENDPOINT = os.getenv("MINIO_PUBLIC_ENDPOINT", "localhost:9000")
+# Se vazio, o host é deduzido do endereço que o usuário abriu no navegador
+# (IP/domínio do servidor) + MINIO_PUBLIC_PORT (porta publicada do MinIO).
+MINIO_PUBLIC_ENDPOINT = os.getenv("MINIO_PUBLIC_ENDPOINT", "")
+MINIO_PUBLIC_PORT = os.getenv("MINIO_PUBLIC_PORT", "29517")
+# Região fixa: assina as URLs localmente, sem chamada de rede ao MinIO.
+MINIO_REGION = "us-east-1"
 MINIO_ACCESS_KEY = os.getenv("MINIO_ROOT_USER", "nicoflix_admin")
 MINIO_SECRET_KEY = os.getenv("MINIO_ROOT_PASSWORD", "nicoflix_minio_secret")
 MINIO_BUCKET = os.getenv("MINIO_BUCKET", "nicoflix-perfis")
@@ -42,13 +47,7 @@ minio_client = Minio(
     access_key=MINIO_ACCESS_KEY,
     secret_key=MINIO_SECRET_KEY,
     secure=MINIO_SECURE,
-)
-# Cliente separado só pra assinar URLs com o host público embutido na assinatura.
-minio_public_client = Minio(
-    MINIO_PUBLIC_ENDPOINT,
-    access_key=MINIO_ACCESS_KEY,
-    secret_key=MINIO_SECRET_KEY,
-    secure=MINIO_SECURE,
+    region=MINIO_REGION,
 )
 
 
@@ -169,13 +168,28 @@ def get_or_create_perfil(user_id, username_padrao):
         return {"user_id": user_id, "nome_exibicao": username_padrao, "bio": "", "foto_key": None}
 
 
+def _endpoint_publico_minio():
+    """Host:porta que o NAVEGADOR usa pra alcançar o MinIO."""
+    if MINIO_PUBLIC_ENDPOINT:
+        return MINIO_PUBLIC_ENDPOINT
+    host = request.host.split(':')[0]
+    return f"{host}:{MINIO_PUBLIC_PORT}"
+
+
 def gerar_url_foto(foto_key):
     """Gera uma URL pré-assinada (temporária) pra servir a foto de perfil
     direto do MinIO pro navegador, sem o bucket precisar ser público."""
     if not foto_key:
         return None
     try:
-        return minio_public_client.presigned_get_object(
+        cliente_publico = Minio(
+            _endpoint_publico_minio(),
+            access_key=MINIO_ACCESS_KEY,
+            secret_key=MINIO_SECRET_KEY,
+            secure=MINIO_SECURE,
+            region=MINIO_REGION,
+        )
+        return cliente_publico.presigned_get_object(
             MINIO_BUCKET, foto_key,
             expires=datetime.timedelta(seconds=PRESIGNED_URL_EXPIRY_SECONDS)
         )
@@ -683,6 +697,7 @@ def upload_foto_perfil(user_id):
         row = cursor.fetchone()
         foto_antiga = row['foto_key'] if row else None
 
+        init_minio_bucket()  # garante o bucket mesmo se o MinIO subiu depois do web
         minio_client.put_object(
             MINIO_BUCKET, object_key, io.BytesIO(conteudo),
             length=len(conteudo), content_type=content_type
