@@ -6,6 +6,10 @@ Projeto desenvolvido para a disciplina de Cloud Computing na FATEC.
 
 - Professor **@siriani** — [github.com/siriani](https://github.com/siriani)
 
+## 📄 Relatório (P1 — ISW055)
+
+- [P1_ISW055_Nicollas_Zoratto.pdf](docs/P1_ISW055_Nicollas_Zoratto.pdf)
+
 ## 🚀 Arquitetura e Tecnologias
 
 - **Consumo de API:** TMDB (The Movie Database) para dados e pôsteres em tempo real.
