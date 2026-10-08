@@ -15,6 +15,7 @@
         <h1>👤 Meu Perfil</h1>
         <div class="user-info">
           <span class="badge {{ 'admin' if role == 'admin' else '' }}">{{ role }}</span>
+          {% if premium %}<span class="badge premium">👑 Premium</span>{% endif %}
           <a href="{{ url_for('index') }}" class="btn-secondary">← Voltar ao catálogo</a>
           <a href="/logout" class="btn-logout">Sair</a>
         </div>
@@ -27,6 +28,15 @@
       {% endfor %}
       {% endif %}
       {% endwith %}
+
+      <div class="alert alert-success" style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;">
+        {% if premium %}
+        <span>👑 Plano <strong>Premium</strong> ativo — favoritos ilimitados ({{ total_favoritos }} salvos).</span>
+        {% else %}
+        <span>Plano <strong>Grátis</strong> — favoritos: {{ total_favoritos }}/{{ limite_favoritos }}.</span>
+        <form action="{{ url_for('assinar') }}" method="POST"><button type="submit" class="btn-primary">👑 Assinar Premium — R$ 9,90/mês</button></form>
+        {% endif %}
+      </div>
 
       <div class="profile-header">
         {% if foto_url %}

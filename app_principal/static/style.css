@@ -378,3 +378,10 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
 }
 
 .hint { font-size: 0.75rem; color: var(--text-tertiary); }
+
+/* Selo Premium (Atividade 7) */
+.badge.premium {
+  background: linear-gradient(135deg, #f5c542, #e8a317);
+  color: #1a1a1a;
+  font-weight: 700;
+}

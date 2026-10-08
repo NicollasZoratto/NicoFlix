@@ -4,3 +4,4 @@ werkzeug
 requests
 minio
 Pillow
+stripe==16.0.0

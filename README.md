@@ -132,3 +132,40 @@ Paleta índigo/ciano, tipografia Inter + Space Grotesk, sem depender de Bootstra
 - `auth_service`, `log_service` e `redis` não publicam porta; `minio` publica só a API (9000), necessária pras URLs pré-assinadas funcionarem — o console (9001) é opcional/debug.
 - Upload de foto valida tipo por conteúdo real (Pillow), não por header, e limita tamanho antes de qualquer gravação.
 - `/forgot-password` sempre devolve a mesma mensagem genérica, evitando enumeração de usuários.
+
+---
+
+## Atividade 7 — Assinatura Premium com Stripe (modo teste)
+
+**Benefício verificável:** usuário do plano grátis pode ter no máximo `FAVORITOS_LIMITE_GRATIS` (5) favoritos — o limite é aplicado no **backend** (`POST /favoritar`), não só na tela. Usuário **Premium** tem favoritos ilimitados e o selo 👑 *Premium* ao lado do nome (catálogo e perfil).
+
+### Rotas
+| Rota | Função |
+|---|---|
+| `POST /assinar` | Exige login; cria uma *Checkout Session* (`mode=subscription`) com `client_reference_id` = id do JWT validado e redireciona (303) ao Stripe. |
+| `GET /assinatura/sucesso` | Apenas informativa. **Não** concede Premium. |
+| `POST /stripe/webhook` | Valida a assinatura `Stripe-Signature` (`stripe.Webhook.construct_event`); sem assinatura válida → **400**, nada é gravado. Em `checkout.session.completed` (pago) grava `premium=1`; em `customer.subscription.deleted` grava `premium=0`. |
+
+### Segurança
+- Premium só é concedido pelo **webhook assinado**, nunca pelo redirecionamento do navegador.
+- **Nenhum dado de cartão** passa pelo servidor nem pelo banco: tabela `assinaturas(user_id, premium, stripe_customer_id, stripe_subscription_id)`.
+- Chaves (`sk_test_…`, `whsec_…`) só em variáveis de ambiente (Portainer); nada no Git.
+- Processamento idempotente (`ON DUPLICATE KEY UPDATE`): eventos repetidos não causam efeito duplicado.
+
+### Configuração (conta Stripe gratuita, *Test mode*)
+1. **Produto/preço:** Product catalog → *Add product* → "Plano Premium", recorrente mensal, **R$ 9,90** → copie o `price_...` (opcional; sem ele o app cria o preço inline).
+2. **Chave secreta:** Developers → API keys → *Secret key* (`sk_test_...`).
+3. **Webhook:** Developers → Webhooks → *Add endpoint* → URL `https://SEU_DOMINIO/stripe/webhook`, eventos `checkout.session.completed` e `customer.subscription.deleted` → copie o *Signing secret* (`whsec_...`).
+   - Endpoints cadastrados no Dashboard normalmente exigem **HTTPS público**. Se o servidor só tem `http://IP:8223`, use o **Stripe CLI** (instalado na sua máquina):
+     `stripe listen --forward-to http://IP_DO_SERVIDOR:8223/stripe/webhook`
+     — ele imprime um `whsec_...` próprio; use **esse** valor em `STRIPE_WEBHOOK_SECRET`. (Alternativa: túnel HTTPS, ex. ngrok.)
+4. No Portainer → Stack → *Environment variables*: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID` → *Pull and redeploy*.
+
+### Como demonstrar
+1. Logue como usuário comum, favorite 5 filmes; o 6º é bloqueado (aviso + log `limite_favoritos_gratis_atingido`).
+2. Clique em **Assinar Premium**, pague com o cartão de teste `4242 4242 4242 4242` (qualquer data futura, CVC e CEP).
+3. Stripe envia o webhook → selo 👑 aparece e o 6º favorito passa a funcionar. Em `/admin/logs` aparece `assinatura_premium_ativada`.
+4. Prova da assinatura: `curl -X POST http://HOST:8223/stripe/webhook -d '{}'` → **400**.
+
+### Testes
+`pytest tests/test_premium.py` — webhook sem assinatura, assinatura forjada, corpo adulterado e assinatura válida (HMAC real), checkout e limite de favoritos.

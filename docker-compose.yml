@@ -99,6 +99,12 @@ services:
       - MINIO_BUCKET=${MINIO_BUCKET:-nicoflix-perfis}
       - MINIO_SECURE=${MINIO_SECURE:-false}
       - PRESIGNED_URL_EXPIRY_SECONDS=${PRESIGNED_URL_EXPIRY_SECONDS:-3600}
+      # Stripe (Atividade 7, modo teste). SEM valor padrão de propósito: defina
+      # nas variáveis de ambiente da stack no Portainer, nunca no Git.
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
+      - STRIPE_PRICE_ID=${STRIPE_PRICE_ID:-}
+      - FAVORITOS_LIMITE_GRATIS=${FAVORITOS_LIMITE_GRATIS:-5}
     depends_on:
       - auth_service
       - log_service

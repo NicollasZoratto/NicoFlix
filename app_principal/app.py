@@ -1,9 +1,11 @@
 import io
+import json
 import os
 import uuid
 import datetime
 
 import requests
+import stripe
 from flask import Flask, render_template, request, redirect, url_for, session, flash, abort
 import mysql.connector
 from minio import Minio
@@ -38,6 +40,16 @@ MINIO_SECRET_KEY = os.getenv("MINIO_ROOT_PASSWORD", "nicoflix_minio_secret")
 MINIO_BUCKET = os.getenv("MINIO_BUCKET", "nicoflix-perfis")
 MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
 PRESIGNED_URL_EXPIRY_SECONDS = int(os.getenv("PRESIGNED_URL_EXPIRY_SECONDS", "3600"))  # 1h
+
+# --- Stripe (Atividade 7: plano Premium, modo teste) ---
+# As chaves vêm SEMPRE de variáveis de ambiente (nunca no código/Git).
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")        # sk_test_...
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")  # whsec_...
+STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID", "")            # price_... (opcional)
+# Benefício Premium: favoritos ilimitados. Plano grátis tem este teto.
+FAVORITOS_LIMITE_GRATIS = int(os.getenv("FAVORITOS_LIMITE_GRATIS", "5"))
+if STRIPE_SECRET_KEY:
+    stripe.api_key = STRIPE_SECRET_KEY
 
 MAX_FOTO_SIZE_BYTES = 2 * 1024 * 1024  # 2 MB
 FORMATOS_AGEITOS = {"jpeg", "png", "webp"}
@@ -88,6 +100,16 @@ def init_app_tables():
                 atualizado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             )
         """)
+        # Atividade 7: só guarda o status premium e IDs do Stripe (NUNCA dados de cartão).
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS assinaturas (
+                user_id INT PRIMARY KEY,
+                premium TINYINT(1) NOT NULL DEFAULT 0,
+                stripe_customer_id VARCHAR(64),
+                stripe_subscription_id VARCHAR(64),
+                atualizado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            )
+        """)
         db.commit()
         cursor.close()
         db.close()
@@ -131,6 +153,21 @@ def get_current_user():
     except Exception as e:
         print(f"Erro ao validar token no Auth Service: {e}")
     return None
+
+
+def usuario_e_premium(user_id):
+    """True se o usuário tem assinatura Premium ativa. Falha fechada (False) em erro."""
+    try:
+        db = get_db()
+        cursor = db.cursor(dictionary=True)
+        cursor.execute("SELECT premium FROM assinaturas WHERE user_id = %s", (user_id,))
+        row = cursor.fetchone()
+        cursor.close()
+        db.close()
+        return bool(row and row.get('premium'))
+    except Exception as e:
+        print(f"Erro ao consultar premium: {e}")
+        return False
 
 
 def fetch_tom_hanks_movies():
@@ -215,6 +252,10 @@ _ACAO_LABELS = {
     'desfavoritar': '☆ Desfavoritou',
     'editar_perfil': '📝 Editou o perfil',
     'upload_foto_perfil': '🖼️ Trocou a foto de perfil',
+    'assinatura_checkout_iniciado': '💳 Iniciou checkout Premium',
+    'assinatura_premium_ativada': '👑 Premium ativado (webhook Stripe)',
+    'assinatura_premium_cancelada': '❎ Premium cancelado (webhook Stripe)',
+    'limite_favoritos_gratis_atingido': '🚫 Limite de favoritos do plano grátis',
 }
 
 
@@ -262,7 +303,9 @@ def index():
         comentarios=comentarios,
         favoritos=favoritos,
         usuario=user['username'],
-        role=user.get('role', 'usuario')
+        role=user.get('role', 'usuario'),
+        premium=usuario_e_premium(user_id),
+        limite_favoritos=FAVORITOS_LIMITE_GRATIS,
     )
 
 
@@ -560,6 +603,17 @@ def favoritar():
             cursor.execute("DELETE FROM favoritos WHERE id = %s", (existente[0],))
             acao = 'desfavoritar'
         else:
+            # Benefício Premium: plano grátis tem teto de favoritos (checado no backend).
+            if not usuario_e_premium(user['user_id']):
+                cursor.execute("SELECT COUNT(*) FROM favoritos WHERE user_id = %s", (user['user_id'],))
+                row = cursor.fetchone()
+                total = row[0] if row else 0
+                if isinstance(total, int) and total >= FAVORITOS_LIMITE_GRATIS:
+                    cursor.close(); db.close()
+                    flash(f'Plano grátis permite até {FAVORITOS_LIMITE_GRATIS} favoritos. '
+                          'Assine o Premium para favoritos ilimitados!', 'error')
+                    log_event(user['user_id'], f'limite_favoritos_gratis_atingido:filme_{movie_id}')
+                    return redirect(url_for('index'))
             cursor.execute("INSERT INTO favoritos (user_id, movie_id) VALUES (%s, %s)", (user['user_id'], movie_id))
             acao = 'favoritar'
 
@@ -571,6 +625,110 @@ def favoritar():
         print(f"Erro ao favoritar: {e}")
 
     return redirect(url_for('index'))
+
+
+@app.route('/assinar', methods=['POST'])
+def assinar():
+    """Cria uma Checkout Session (modo assinatura) e redireciona o usuário logado ao Stripe."""
+    user = get_current_user()
+    if not user:
+        return redirect(url_for('login'))
+    if not STRIPE_SECRET_KEY:
+        flash('Pagamentos não configurados no servidor (STRIPE_SECRET_KEY ausente).', 'error')
+        return redirect(url_for('perfil'))
+    if usuario_e_premium(user['user_id']):
+        flash('Você já é Premium. 👑', 'success')
+        return redirect(url_for('perfil'))
+
+    if STRIPE_PRICE_ID:
+        item = {"price": STRIPE_PRICE_ID, "quantity": 1}
+    else:  # fallback: cria o preço inline (R$ 9,90/mês)
+        item = {"quantity": 1, "price_data": {
+            "currency": "brl", "unit_amount": 990,
+            "recurring": {"interval": "month"},
+            "product_data": {"name": "NicoFlix Premium"}}}
+    base = request.host_url.rstrip('/')
+    try:
+        checkout = stripe.checkout.Session.create(
+            mode="subscription",
+            line_items=[item],
+            # id vem do JWT validado, nunca de um campo do formulário
+            client_reference_id=str(user['user_id']),
+            success_url=f"{base}/assinatura/sucesso",
+            cancel_url=f"{base}/perfil",
+        )
+    except Exception as e:
+        print(f"Erro ao criar checkout Stripe: {e}")
+        flash('Não foi possível iniciar o pagamento agora. Tente novamente.', 'error')
+        return redirect(url_for('perfil'))
+    log_event(user['user_id'], 'assinatura_checkout_iniciado')
+    return redirect(checkout.url, code=303)
+
+
+@app.route('/assinatura/sucesso')
+def assinatura_sucesso():
+    """Só informativa: o Premium é liberado EXCLUSIVAMENTE pelo webhook assinado."""
+    user = get_current_user()
+    if not user:
+        return redirect(url_for('login'))
+    if usuario_e_premium(user['user_id']):
+        flash('Pagamento confirmado! Você agora é Premium. 👑', 'success')
+    else:
+        flash('Pagamento recebido. Estamos aguardando a confirmação do Stripe — '
+              'atualize a página em alguns segundos.', 'success')
+    return redirect(url_for('perfil'))
+
+
+@app.route('/stripe/webhook', methods=['POST'])
+def stripe_webhook():
+    """Recebe eventos do Stripe. Rejeita (400) qualquer requisição sem assinatura válida."""
+    if not STRIPE_WEBHOOK_SECRET:
+        return {"error": "webhook nao configurado"}, 503
+    payload = request.get_data()  # corpo CRU: a assinatura é calculada sobre ele
+    sig = request.headers.get('Stripe-Signature', '')
+    try:
+        stripe.Webhook.construct_event(payload, sig, STRIPE_WEBHOOK_SECRET)
+    except ValueError:
+        return {"error": "payload invalido"}, 400
+    except Exception as e:  # SignatureVerificationError (e qualquer falha de verificação)
+        print(f"[STRIPE] assinatura rejeitada: {type(e).__name__}")
+        return {"error": "assinatura invalida"}, 400
+
+    evento = json.loads(payload)
+    tipo = evento.get('type')
+    obj = (evento.get('data') or {}).get('object') or {}
+    try:
+        if tipo == 'checkout.session.completed':
+            ref = str(obj.get('client_reference_id') or '')
+            if ref.isdigit() and obj.get('payment_status') in ('paid', 'no_payment_required'):
+                user_id = int(ref)
+                db = get_db()
+                cursor = db.cursor()
+                cursor.execute(
+                    """INSERT INTO assinaturas (user_id, premium, stripe_customer_id, stripe_subscription_id)
+                       VALUES (%s, 1, %s, %s)
+                       ON DUPLICATE KEY UPDATE premium = 1,
+                         stripe_customer_id = VALUES(stripe_customer_id),
+                         stripe_subscription_id = VALUES(stripe_subscription_id)""",
+                    (user_id, obj.get('customer'), obj.get('subscription')))
+                db.commit(); cursor.close(); db.close()
+                _log_sem_request(user_id, 'assinatura_premium_ativada')
+        elif tipo == 'customer.subscription.deleted':
+            sub_id = obj.get('id')
+            if sub_id:
+                db = get_db()
+                cursor = db.cursor()
+                cursor.execute("UPDATE assinaturas SET premium = 0 WHERE stripe_subscription_id = %s", (sub_id,))
+                db.commit(); cursor.close(); db.close()
+                _log_sem_request(None, 'assinatura_premium_cancelada')
+    except Exception as e:
+        print(f"[STRIPE] erro ao processar evento {tipo}: {e}")
+        return {"error": "falha ao processar"}, 500  # Stripe reenviará
+    return {"received": True}, 200
+
+
+def _log_sem_request(usuario_id, acao):
+    log_event(usuario_id, acao)
 
 
 @app.route('/perfil')
@@ -608,6 +766,9 @@ def perfil():
         foto_url=foto_url,
         favoritos_filmes=favoritos_filmes,
         meu_user_id=user['user_id'],
+        premium=usuario_e_premium(user['user_id']),
+        limite_favoritos=FAVORITOS_LIMITE_GRATIS,
+        total_favoritos=len(favoritos_filmes),
     )
 
 

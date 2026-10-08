@@ -14,6 +14,7 @@
         <div class="user-info">
           <span>Usuário: <strong>{{ usuario }}</strong></span>
           <span class="badge {{ 'admin' if role == 'admin' else '' }}">{{ role }}</span>
+          {% if premium %}<span class="badge premium">👑 Premium</span>{% endif %}
           <a href="{{ url_for('perfil') }}" class="btn-secondary">👤 Perfil</a>
           {% if role == 'admin' %}
           <a href="{{ url_for('admin_comentarios') }}" class="btn-secondary">🛡️ Moderação</a>
@@ -30,6 +31,13 @@
       {% endfor %}
       {% endif %}
       {% endwith %}
+
+      {% if not premium %}
+      <div class="alert alert-success" style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;">
+        <span>Plano grátis: até {{ limite_favoritos }} favoritos ({{ favoritos|length }}/{{ limite_favoritos }}). Premium = ilimitados.</span>
+        <form action="{{ url_for('assinar') }}" method="POST"><button type="submit" class="btn-primary">👑 Assinar Premium — R$ 9,90/mês</button></form>
+      </div>
+      {% endif %}
 
       <div class="movie-grid">
         {% for f in filmes %}
